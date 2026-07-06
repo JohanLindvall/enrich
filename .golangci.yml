@@ -1,0 +1,13 @@
+version: "2"
+
+linters:
+  exclusions:
+    rules:
+      # fields.go uses the lightning generator's `nocopy` json tag option
+      # (zero-alloc decoding that aliases the input buffer) and `lax` option
+      # (skip a type-mismatched value instead of failing the decode);
+      # staticcheck knows neither.
+      - path: fields\.go
+        linters:
+          - staticcheck
+        text: "SA5008:.*(nocopy|lax)"
