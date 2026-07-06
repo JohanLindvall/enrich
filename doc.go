@@ -31,9 +31,11 @@
 // # Severity
 //
 // Severities are normalized to trace, debug, info, warn, error, and fatal
-// (see NormalizeSeverity and the level constants). HTTP response codes and
+// (see NormalizeSeverity and the level constants; the numeric levels follow
+// the OpenTelemetry SeverityNumber convention). HTTP response codes and
 // gRPC status codes map to severities when the line carries no explicit
-// level (see HTTPStatusSeverity).
+// level (see HTTPStatusSeverity). Syslog's notice severity normalizes to
+// info but keeps the finer-grained INFO2 severity number (Info2LevelNo).
 //
 // # Memory
 //

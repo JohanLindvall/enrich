@@ -8,8 +8,9 @@ public entry point `Parse(input string) *Result`.
 
 - `doc.go` — package documentation.
 - `enrich.go` — `Parse` itself and the `Result` result type. Dispatch
-  order: generated JSON decode → logfmt scan (`parseLogFmt`) → regex pattern
-  table (`enrichFromPatterns`). First strategy that applies wins.
+  order: generated JSON decode → logfmt scan (`enrichFromLogFmt`) → regex
+  pattern table (`enrichFromPatterns`). First strategy that applies wins;
+  `Result.Format` records which one did.
 - `fields.go` — the `enrichFields` struct listing the JSON keys `Parse`
   inspects, with lightning tag options (`a|b|c` key aliases, `nocopy`, `lax`).
 - `fields_unmarshal.go` — **GENERATED** from `fields.go` by the lightning
@@ -35,9 +36,10 @@ public entry point `Parse(input string) *Result`.
   "time") win over lifted values. `level` is listed last in the Severity tag
   so a later textual value wins; capital `"Level"` is deliberately excluded
   (Serilog uses it for a message property, not severity).
-- **`parseLogFmt` runs before the pattern table** and also handles the
+- **`enrichFromLogFmt` runs before the pattern table** and also handles the
   level-only case; the table's logfmt-ish entries only see lines without
-  `=` pairs.
+  `=` pairs. It scans the whole line (no early exit) so trace_id/span_id/
+  traceparent keys are found wherever they appear.
 - **klog timestamps carry no year** — `expandKlogTime` infers it and adjusts
   across year boundaries; the corresponding test skips the year.
 - **Envoy `response_code: 0`**: no `protocol` field → TCP proxying, info;
@@ -76,9 +78,11 @@ lightning's `nocopy`/`lax` tag options as unknown. Don't widen the exclusion.
 ## Performance
 
 `Parse` is on a hot path (one call per log line). Current numbers
-(Ryzen 7 8840HS, amd64): ~840 ns / 3 allocs for a ~900 B JSON line, ~770 ns /
-2 allocs for a ~1.9 kB logfmt line. The allocation budget comes from the
+(Ryzen 7 8840HS, amd64): ~940 ns / 3 allocs for a ~900 B JSON line, ~840 ns /
+2 allocs for a ~1.9 kB logfmt line, ~1.6 µs / 1 alloc for a 1 kB line that
+matches nothing (BenchmarkParseMiss). The allocation budget comes from the
 nocopy JSON decode and logfmt's zero-alloc iteration — keep new fields
 `nocopy,lax` and avoid per-line allocations in new code paths. The pattern
-table is ordered roughly most-common-first and each entry can carry a cheap
-`contain` substring pre-filter — give new entries one whenever possible.
+table is ordered roughly most-common-first; every entry needs either a
+`firstBytes` classifier match or a `contain` substring pre-filter (see the
+lineparser.go note above) — the miss path regressed 9x without them.

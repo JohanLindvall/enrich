@@ -9,6 +9,7 @@ plain-text formats.
 e := enrich.Parse(`{"@t":"2021-09-01T12:00:00Z","@l":"Information","@m":"Hello, World!"}`)
 fmt.Println(e.Time)     // 2021-09-01 12:00:00 +0000 UTC
 fmt.Println(e.Severity) // info
+fmt.Println(e.Format)   // json
 ```
 
 ## Install
@@ -48,10 +49,13 @@ debug unparsed lines.
 ## Severity
 
 Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`
-(`NormalizeSeverity`, with numeric equivalents and `SeverityText`). When a
-line carries no explicit level, HTTP response codes and gRPC status codes map
-to a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 4xx/5xx → warn
-(or error where the context indicates a failure).
+(`NormalizeSeverity`, with numeric equivalents following the OpenTelemetry
+`SeverityNumber` convention, and `SeverityText` mapping back). When a line
+carries no explicit level, HTTP response codes and gRPC status codes map to
+a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 4xx/5xx → warn (or error
+where the context indicates a failure). Syslog's notice severity keeps the
+finer-grained OTLP INFO2 number (`Info2LevelNo`) while normalizing to
+`info`.
 
 ## Memory model
 
@@ -85,5 +89,7 @@ patch version on every green main build.
 go test -run='^$' -bench=. -benchmem .
 ```
 
-On a Ryzen 7 8840HS (amd64): ~840 ns and 3 allocations to enrich a ~900 B JSON
-Envoy access-log line; ~770 ns and 2 allocations for a ~1.9 kB logfmt line.
+On a Ryzen 7 8840HS (amd64): ~940 ns and 3 allocations to enrich a ~900 B JSON
+Envoy access-log line; ~840 ns and 2 allocations for a ~1.9 kB logfmt line;
+~1.6 µs for a 1 kB line that matches nothing (the pattern table is skipped
+almost entirely via first-byte dispatch and substring prefilters).

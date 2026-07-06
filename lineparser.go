@@ -37,7 +37,7 @@ var rfc3339NanoSpaceExpr = `"?(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+
 
 var lineParsers = []lineParser{
 	// logfmt lines (level=.. and/or t/ts/time/timestamp=..) are handled before this
-	// table by parseLogFmt, including the level-only case.
+	// table by enrichFromLogFmt, including the level-only case.
 	{"", `^` + ymdSlashExpr + `\s\[(?P<level>[a-zA-Z]+)\]`, ymdSlashLayouts},
 	// AWS Lambda: ts TAB request-id TAB LEVEL TAB message. Must precede the
 	// generic RFC3339 entry, which would otherwise take the timestamp and stop.
