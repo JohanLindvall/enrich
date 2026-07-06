@@ -108,7 +108,7 @@ func (clp *compiledLineParser) warnParseFailure(msg string) {
 
 // apply matches the parser against message and, on a match, fills result from
 // the named submatches. It reports whether the parser matched.
-func (clp *compiledLineParser) apply(result *Enriched, message string) bool {
+func (clp *compiledLineParser) apply(result *Result, message string) bool {
 	if clp.contain != "" && !strings.Contains(message, clp.contain) {
 		return false
 	}
@@ -128,7 +128,7 @@ func (clp *compiledLineParser) apply(result *Enriched, message string) bool {
 }
 
 // applySubmatch fills the result field selected by the submatch name.
-func (clp *compiledLineParser) applySubmatch(result *Enriched, name, value, message string) {
+func (clp *compiledLineParser) applySubmatch(result *Result, name, value, message string) {
 	switch name {
 	case "level":
 		result.Severity = value
@@ -141,15 +141,9 @@ func (clp *compiledLineParser) applySubmatch(result *Enriched, name, value, mess
 			return
 		}
 		if name == "ktime" {
-			value = expandKlogTime(value)
+			value = expandKlogTime(value, time.Now().UTC())
 		}
 		if ts, ok := clp.parseLayoutTime(value); ok {
-			result.Time = ts
-		} else {
-			clp.warnParseFailure(message)
-		}
-	case "unixts":
-		if ts, ok := parseUnixTime(value); ok {
 			result.Time = ts
 		} else {
 			clp.warnParseFailure(message)
@@ -192,8 +186,7 @@ func (clp *compiledLineParser) parseLayoutTime(ts string) (time.Time, bool) {
 
 // expandKlogTime prefixes a year onto a klog "MMDD hh:mm:ss..." timestamp,
 // adjusting across a year boundary when the month disagrees with the clock.
-func expandKlogTime(ts string) string {
-	now := time.Now().UTC()
+func expandKlogTime(ts string, now time.Time) string {
 	year := now.Year()
 	month := now.Month()
 	if month == 1 && ts[:2] == "12" {
@@ -202,24 +195,6 @@ func expandKlogTime(ts string) string {
 		year++ // date probably refers to next year
 	}
 	return strconv.Itoa(year) + ts
-}
-
-// parseUnixTime parses a "seconds[.fraction]" epoch timestamp.
-func parseUnixTime(ts string) (time.Time, bool) {
-	var nsec int64
-	split := strings.SplitN(ts, ".", 2)
-	sec, err := strconv.ParseInt(split[0], 10, 64)
-	if err == nil && len(split) == 2 {
-		nstr := split[1]
-		nsec, err = strconv.ParseInt(nstr, 10, 64)
-		for mul := len(nstr); mul < 9; mul++ {
-			nsec *= 10
-		}
-	}
-	if err != nil {
-		return time.Time{}, false
-	}
-	return time.Unix(sec, nsec).UTC(), true
 }
 
 func parseSyslogTime(t string) (time.Time, bool) {

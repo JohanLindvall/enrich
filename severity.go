@@ -5,6 +5,10 @@ import (
 	"strconv"
 )
 
+// The normalized severity levels and their numeric equivalents. The numbers
+// follow the OpenTelemetry log SeverityNumber convention, where each level
+// starts a range of four (trace=1, debug=5, info=9, warn=13, error=17,
+// fatal=21); SeverityText maps any number in a range back to its level.
 const (
 	TraceLevel   = "trace"
 	DebugLevel   = "debug"
@@ -48,8 +52,8 @@ func NormalizeSeverity(input string) (string, int) {
 	return "", 0
 }
 
-// GetSeverityText Gets the severity text for a given severity number
-func GetSeverityText(severity int) string {
+// SeverityText Gets the severity text for a given severity number
+func SeverityText(severity int) string {
 	if severity < 1 {
 		return ""
 	}
@@ -107,14 +111,14 @@ func getRedisSeverityText(severity string) string {
 
 func parseHTTPResponseSeverity(value string, fail bool) string {
 	if code, err := strconv.ParseInt(value, 10, 64); err == nil && code >= 0 && code <= 599 {
-		return ParseHTTPResponseSeverity(code, fail)
+		return HTTPStatusSeverity(code, fail)
 	}
 
 	return ""
 }
 
-// ParseHTTPResponseSeverity parses severity from the HTTP response code.
-func ParseHTTPResponseSeverity(code int64, fail bool) string {
+// HTTPStatusSeverity parses severity from the HTTP response code.
+func HTTPStatusSeverity(code int64, fail bool) string {
 	if code >= 0 && code <= 599 {
 		if code == 0 {
 			return ErrorLevel
@@ -134,9 +138,9 @@ func ParseHTTPResponseSeverity(code int64, fail bool) string {
 	return ""
 }
 
-func setHTTPResponseCode(result *Enriched, code int64, fail bool) {
+func setHTTPResponseCode(result *Result, code int64, fail bool) {
 	if fail || result.Severity == "" || result.Severity == "info" {
-		if httpSev := ParseHTTPResponseSeverity(code, fail); httpSev != "" {
+		if httpSev := HTTPStatusSeverity(code, fail); httpSev != "" {
 			result.Severity = httpSev
 		}
 	}

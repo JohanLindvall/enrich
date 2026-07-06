@@ -2,7 +2,7 @@ package enrich
 
 import "time"
 
-// enrichFields lists the top-level JSON object keys that Enrich inspects. The
+// enrichFields lists the top-level JSON object keys that Parse inspects. The
 // lightning generator turns this into a fast, allocation-light UnmarshalJSON
 // (see fields_unmarshal.go); regenerate with `go run
 // github.com/JohanLindvall/lightning fields.go`.
@@ -24,7 +24,7 @@ import "time"
 // string (with 'T' or space separator) or a Unix timestamp in seconds, millis,
 // or micros, and leaves the field zero for anything it cannot interpret.
 //
-// nocopy makes the string/raw fields alias the input buffer, which Enrich keeps
+// nocopy makes the string/raw fields alias the input buffer, which Parse keeps
 // alive while the result is in use.
 type enrichFields struct {
 	Time time.Time `json:"@t|@timestamp|timestamp|Timestamp|ts|time|Time,nocopy,lax"`

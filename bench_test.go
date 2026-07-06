@@ -10,7 +10,7 @@ var line = `{"@timestamp":"2025-03-19T12:10:20.394Z","grpc_status_number":0,"grp
 // BenchmarkEnrich-22     27761505              1300 ns/op             684 B/op          4 allocs/op
 func BenchmarkEnrich(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Enrich(line)
+		Parse(line)
 	}
 }
 
@@ -22,6 +22,6 @@ var faro = `timestamp="2025-09-25 06:11:46.397 +0000 UTC" kind=event event_name=
 // BenchmarkFaroEvent-22   13112888              2743 ns/op             996 B/op          3 allocs/op
 func BenchmarkFaroEvent(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Enrich(faro)
+		Parse(faro)
 	}
 }

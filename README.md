@@ -6,7 +6,7 @@ trace/span IDs, structured-log fields, Azure resource metadata, and
 plain-text formats.
 
 ```go
-e := enrich.Enrich(`{"@t":"2021-09-01T12:00:00Z","@l":"Information","@m":"Hello, World!"}`)
+e := enrich.Parse(`{"@t":"2021-09-01T12:00:00Z","@l":"Information","@m":"Hello, World!"}`)
 fmt.Println(e.Time)     // 2021-09-01 12:00:00 +0000 UTC
 fmt.Println(e.Severity) // info
 ```
@@ -19,7 +19,7 @@ go get github.com/JohanLindvall/enrich
 
 ## What it recognizes
 
-`Enrich` tries three strategies in order and stops at the first that applies:
+`Parse` tries three strategies in order and stops at the first that applies:
 
 1. **JSON** — decoded with a generated, allocation-light decoder
    ([lightning](https://github.com/JohanLindvall/lightning)) that accepts the
@@ -39,16 +39,16 @@ go get github.com/JohanLindvall/enrich
 ## Severity
 
 Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`
-(`NormalizeSeverity`, with numeric equivalents and `GetSeverityText`). When a
+(`NormalizeSeverity`, with numeric equivalents and `SeverityText`). When a
 line carries no explicit level, HTTP response codes and gRPC status codes map
-to a severity (`ParseHTTPResponseSeverity`): 1xx–3xx → info, 4xx/5xx → warn
+to a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 4xx/5xx → warn
 (or error where the context indicates a failure).
 
 ## Memory model
 
-The result shares memory with the input: `Enriched.Body` is the input string
+The result shares memory with the input: `Result.Body` is the input string
 itself, and fields populated from a JSON line alias the input's backing array
-instead of copying. This keeps `Enrich` fast (single-digit allocations per
+instead of copying. This keeps `Parse` fast (single-digit allocations per
 line) but keeps the input alive as long as the result is reachable — copy the
 fields you need if you hold many results.
 

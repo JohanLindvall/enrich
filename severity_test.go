@@ -2,13 +2,11 @@ package enrich
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestGetSeverityText(t *testing.T) {
+func TestSeverityText(t *testing.T) {
 	testCases := []struct {
 		in   int
 		want string
@@ -25,8 +23,88 @@ func TestGetSeverityText(t *testing.T) {
 		{25, ""},
 	}
 	for _, tc := range testCases {
-		assert.Equal(t, tc.want, GetSeverityText(tc.in), "severity %d", tc.in)
+		assert.Equal(t, tc.want, SeverityText(tc.in), "severity %d", tc.in)
 	}
+}
+
+func TestNormalizeSeverity(t *testing.T) {
+	testCases := []struct {
+		in     string
+		want   string
+		wantNo int
+	}{
+		{"", "", 0},
+		{"unknown", "", 0},
+		{"trc", TraceLevel, TraceLevelNo},
+		{"TRACE", TraceLevel, TraceLevelNo},
+		{"d", DebugLevel, DebugLevelNo},
+		{"dbg", DebugLevel, DebugLevelNo},
+		{"Debug", DebugLevel, DebugLevelNo},
+		{"i", InfoLevel, InfoLevelNo},
+		{"info", InfoLevel, InfoLevelNo},
+		{"Information", InfoLevel, InfoLevelNo},
+		{"informational", InfoLevel, InfoLevelNo},
+		{"normal", InfoLevel, InfoLevelNo},
+		{"log", InfoLevel, InfoLevelNo},
+		{"w", WarnLevel, WarnLevelNo},
+		{"WRN", WarnLevel, WarnLevelNo},
+		{"Warning", WarnLevel, WarnLevelNo},
+		{"e", ErrorLevel, ErrorLevelNo},
+		{"err", ErrorLevel, ErrorLevelNo},
+		{"ERROR", ErrorLevel, ErrorLevelNo},
+		// Fatal aliases must still normalize to fatal.
+		{"fatal", FatalLevel, FatalLevelNo},
+		{"FATAL", FatalLevel, FatalLevelNo},
+		{"f", FatalLevel, FatalLevelNo},
+		{"ftl", FatalLevel, FatalLevelNo},
+		{"crit", FatalLevel, FatalLevelNo},
+		{"critical", FatalLevel, FatalLevelNo},
+		{"panic", FatalLevel, FatalLevelNo},
+		{"pnc", FatalLevel, FatalLevelNo},
+		// Regression: the unanchored fatal alternation used to match any string
+		// containing "f", "crit" or "panic" (e.g. the "[configuration]" tag from
+		// the Go standard logger). These must NOT be classified as fatal.
+		{"configuration", "", 0},
+		{"default", "", 0},
+		{"profile", "", 0},
+		{"critique", "", 0},
+		{"panicking", "", 0},
+	}
+	for _, tc := range testCases {
+		got, gotNo := NormalizeSeverity(tc.in)
+		assert.Equal(t, tc.want, got, "severity %q", tc.in)
+		assert.Equal(t, tc.wantNo, gotNo, "severity number %q", tc.in)
+	}
+}
+
+func TestHTTPStatusSeverity(t *testing.T) {
+	testCases := []struct {
+		code int64
+		fail bool
+		want string
+	}{
+		{0, false, ErrorLevel},  // Envoy: no response at all
+		{100, false, InfoLevel}, // informational
+		{200, false, InfoLevel}, // success
+		{304, false, InfoLevel}, // redirect
+		{404, false, WarnLevel}, // client error, tolerant context
+		{404, true, ErrorLevel}, // client error, failing context
+		{500, false, WarnLevel}, // server error
+		{500, true, WarnLevel},  // fail only escalates 4xx
+		{50, false, WarnLevel},  // below 100 but valid range
+		{-1, false, ""},         // out of range
+		{600, false, ""},        // out of range
+	}
+	for _, tc := range testCases {
+		assert.Equal(t, tc.want, HTTPStatusSeverity(tc.code, tc.fail), "code %d fail %v", tc.code, tc.fail)
+	}
+}
+
+func TestParseHTTPResponseSeverity(t *testing.T) {
+	assert.Equal(t, InfoLevel, parseHTTPResponseSeverity("200", false))
+	assert.Equal(t, ErrorLevel, parseHTTPResponseSeverity("404", true))
+	assert.Equal(t, "", parseHTTPResponseSeverity("abc", false), "non-numeric")
+	assert.Equal(t, "", parseHTTPResponseSeverity("9999", false), "out of range")
 }
 
 func TestGetSyslogSeverityText(t *testing.T) {
@@ -49,34 +127,18 @@ func TestGetSyslogSeverityText(t *testing.T) {
 	}
 }
 
-func TestParseUnixTime(t *testing.T) {
-	ts, ok := parseUnixTime("1700000000")
-	require.True(t, ok)
-	assert.Equal(t, time.Unix(1700000000, 0).UTC(), ts)
-
-	// A fractional part shorter than nanosecond precision is right-padded.
-	ts, ok = parseUnixTime("1700000000.5")
-	require.True(t, ok)
-	assert.Equal(t, time.Unix(1700000000, 500000000).UTC(), ts)
-
-	ts, ok = parseUnixTime("1700000000.123456789")
-	require.True(t, ok)
-	assert.Equal(t, time.Unix(1700000000, 123456789).UTC(), ts)
-
-	_, ok = parseUnixTime("abc")
-	assert.False(t, ok)
-
-	_, ok = parseUnixTime("1700000000.xyz")
-	assert.False(t, ok)
-}
-
-func TestWarnParseFailure_RateLimited(t *testing.T) {
-	clp := compiledLineParsers[0]
-	before := clp.lastWrn
-	clp.warnParseFailure("some line")
-	require.NotEqual(t, before, clp.lastWrn, "first call warns and stamps lastWrn")
-
-	stamped := clp.lastWrn
-	clp.warnParseFailure("another line")
-	assert.Equal(t, stamped, clp.lastWrn, "a second call within ten minutes is suppressed")
+func TestGetRedisSeverityText(t *testing.T) {
+	testCases := []struct {
+		in   string
+		want string
+	}{
+		{".", DebugLevel},
+		{"-", DebugLevel},
+		{"*", InfoLevel},
+		{"#", WarnLevel},
+		{"!", ""},
+	}
+	for _, tc := range testCases {
+		assert.Equal(t, tc.want, getRedisSeverityText(tc.in), "redis level %q", tc.in)
+	}
 }

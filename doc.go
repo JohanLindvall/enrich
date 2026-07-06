@@ -5,7 +5,7 @@
 //
 // # Parsing
 //
-// Enrich is the entry point. It tries three strategies in order and stops at
+// Parse is the entry point. It tries three strategies in order and stops at
 // the first that applies:
 //
 //  1. JSON: the line is decoded with a generated, allocation-light decoder
@@ -24,11 +24,11 @@
 // Severities are normalized to trace, debug, info, warn, error, and fatal
 // (see NormalizeSeverity and the level constants). HTTP response codes and
 // gRPC status codes map to severities when the line carries no explicit
-// level (see ParseHTTPResponseSeverity).
+// level (see HTTPStatusSeverity).
 //
 // # Memory
 //
-// The result shares memory with the input: Enriched.Body is the input
+// The result shares memory with the input: Result.Body is the input
 // itself, and string fields populated from a JSON line alias the input's
 // backing array rather than copying it. Go strings are immutable, so this is
 // safe, but the input stays reachable for as long as the result (or any

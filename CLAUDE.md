@@ -2,15 +2,15 @@
 
 Log-line metadata extraction: timestamp, normalized severity, trace/span IDs,
 structured-log fields, Azure resource metadata, exception details. Single
-public entry point `Enrich(input string) *Enriched`.
+public entry point `Parse(input string) *Result`.
 
 ## Layout
 
 - `doc.go` — package documentation.
-- `enrich.go` — `Enrich` itself and the `Enriched` result type. Dispatch
+- `enrich.go` — `Parse` itself and the `Result` result type. Dispatch
   order: generated JSON decode → logfmt scan (`parseLogFmt`) → regex pattern
   table (`enrichFromPatterns`). First strategy that applies wins.
-- `fields.go` — the `enrichFields` struct listing the JSON keys `Enrich`
+- `fields.go` — the `enrichFields` struct listing the JSON keys `Parse`
   inspects, with lightning tag options (`a|b|c` key aliases, `nocopy`, `lax`).
 - `fields_unmarshal.go` — **GENERATED** from `fields.go` by the lightning
   generator. Never edit by hand; edit `fields.go` and run `make generate`.
@@ -63,7 +63,7 @@ lightning's `nocopy`/`lax` tag options as unknown. Don't widen the exclusion.
 
 ## Performance
 
-`Enrich` is on a hot path (one call per log line). Current numbers
+`Parse` is on a hot path (one call per log line). Current numbers
 (Ryzen 7 8840HS, amd64): ~840 ns / 3 allocs for a ~900 B JSON line, ~770 ns /
 2 allocs for a ~1.9 kB logfmt line. The allocation budget comes from the
 nocopy JSON decode and logfmt's zero-alloc iteration — keep new fields
