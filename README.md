@@ -93,3 +93,40 @@ On a Ryzen 7 8840HS (amd64): ~940 ns and 3 allocations to enrich a ~900 B JSON
 Envoy access-log line; ~840 ns and 2 allocations for a ~1.9 kB logfmt line;
 ~1.6 µs for a 1 kB line that matches nothing (the pattern table is skipped
 almost entirely via first-byte dispatch and substring prefilters).
+
+## Alternatives
+
+There is no other embeddable Go library that auto-detects the log format and
+extracts timestamp, severity, and trace IDs in one zero-config call; that
+functionality otherwise lives inside the big log pipeline tools:
+
+- **[Grafana Loki's `detected_level`](https://grafana.com/docs/loki/latest/)**
+  is the closest in spirit: at ingest it tries JSON, logfmt, and keyword
+  scanning to attach a severity label. It handles levels only — no
+  timestamps, traces, or exceptions — and its keyword scan is prone to
+  picking severities out of message text
+  ([grafana/loki#12645](https://github.com/grafana/loki/issues/12645),
+  [#14443](https://github.com/grafana/loki/issues/14443),
+  [#15444](https://github.com/grafana/loki/issues/15444)), which this
+  package's table-driven parsers avoid.
+- **[OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)**
+  (filelog receiver / Stanza operators) parses the same fields — its severity
+  parser targets the same OTLP severity numbers used here — but every source
+  needs explicit parser configuration; nothing auto-detects.
+- **[Vector](https://vector.dev/)** ships `parse_json`, `parse_logfmt`,
+  `parse_syslog`, `parse_apache_log`, `parse_klog`, ... as VRL functions, but
+  you write a remap script per source, and it is a Rust daemon rather than a
+  library.
+- **Fluent Bit, Fluentd, Promtail/Alloy** pipeline stages: per-input parser
+  configuration, same story.
+- **Datadog's backend pipelines** auto-parse JSON and remap status/timestamp/
+  trace attributes server-side (SaaS only); its per-pipeline parsing hit-rate
+  view is what `Result.Format` lets you build.
+
+Piecemeal Go libraries cover fragments of the job:
+[araddon/dateparse](https://github.com/araddon/dateparse) auto-detects
+timestamp formats (time only), grok ports like
+[elastic/go-grok](https://github.com/elastic/go-grok) extract fields from
+patterns you supply, and [go-logfmt](https://github.com/go-logfmt/logfmt) is
+a parsing primitive. The standard Go logging libraries (slog, zap, logrus,
+zerolog) are writers, not readers — none parse foreign logs.
