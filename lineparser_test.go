@@ -77,13 +77,13 @@ func TestApplySubmatch_TimeWithoutLayouts(t *testing.T) {
 
 func TestWarnParseFailure_RateLimited(t *testing.T) {
 	clp := compiledLineParsers[0]
-	before := clp.lastWrn
+	before := clp.lastWrn.Load()
 	clp.warnParseFailure("some line")
-	require.NotEqual(t, before, clp.lastWrn, "first call warns and stamps lastWrn")
+	require.NotEqual(t, before, clp.lastWrn.Load(), "first call warns and stamps lastWrn")
 
-	stamped := clp.lastWrn
+	stamped := clp.lastWrn.Load()
 	clp.warnParseFailure("another line")
-	assert.Equal(t, stamped, clp.lastWrn, "a second call within ten minutes is suppressed")
+	assert.Equal(t, stamped, clp.lastWrn.Load(), "a second call within ten minutes is suppressed")
 }
 
 func TestApplySubmatch_BadTime(t *testing.T) {

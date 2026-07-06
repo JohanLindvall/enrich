@@ -36,8 +36,8 @@ type enrichFields struct {
 	// uses "Level" for a message property (e.g. "Level":"Domains"), which must not
 	// clobber the real severity.
 	Severity      string `json:"severity|Severity|@l|@level|level,nocopy,lax"`
-	TraceID       string `json:"traceid|traceID|TraceId|TraceID|request_id,nocopy,lax"`
-	SpanID        string `json:"spanid|spanID|SpanId|SpanID,nocopy,lax"`
+	TraceID       string `json:"traceid|traceID|TraceId|TraceID|trace_id|request_id,nocopy,lax"`
+	SpanID        string `json:"spanid|spanID|SpanId|SpanID|span_id,nocopy,lax"`
 	SourceContext string `json:"sourcecontext|sourceContext|SourceContext,nocopy,lax"`
 	TemplateHash  string `json:"@i,nocopy,lax"`
 	Template      string `json:"@mt,nocopy,lax"`
@@ -50,6 +50,15 @@ type enrichFields struct {
 
 	ResultType        string `json:"resultType,nocopy,lax"`
 	ResultDescription string `json:"resultDescription,nocopy,lax"`
+
+	// Docker json-file (and fluent-bit) records carry the original line in a
+	// top-level "log" string; it is enriched recursively like properties.log.
+	Log string `json:"log,nocopy,lax"`
+
+	// MongoDB structured logs (4.4+) nest the timestamp as {"t":{"$date":...}}
+	// and carry a single-letter severity (I/W/E/F/D1-D5) in "s".
+	MongoTime     mongoDate `json:"t,nocopy,lax"`
+	MongoSeverity string    `json:"s,nocopy,lax"`
 
 	ResponseCode     *int64 `json:"response_code|responseCode|statusCode|StatusCode,nocopy,lax"`
 	GrpcStatusNumber *int64 `json:"grpc_status_number,nocopy,lax"`
@@ -73,6 +82,11 @@ type enrichProperties struct {
 // enrichResponseStatus is the "responseStatus" envelope carrying an HTTP code.
 type enrichResponseStatus struct {
 	Code *int64 `json:"code,nocopy,lax"`
+}
+
+// mongoDate is MongoDB's extended-JSON date envelope ({"$date": "..."}).
+type mongoDate struct {
+	Date time.Time `json:"$date,nocopy,lax"`
 }
 
 // httpResponse decodes the small JSON document carried as a string in

@@ -107,23 +107,49 @@ func TestParseHTTPResponseSeverity(t *testing.T) {
 	assert.Equal(t, "", parseHTTPResponseSeverity("9999", false), "out of range")
 }
 
-func TestGetSyslogSeverityText(t *testing.T) {
+func TestSyslogSeverity(t *testing.T) {
+	testCases := []struct {
+		in     int
+		want   string
+		wantNo int
+	}{
+		{0, FatalLevel, FatalLevelNo},
+		{1, FatalLevel, FatalLevelNo},
+		{2, FatalLevel, FatalLevelNo},
+		{3, ErrorLevel, ErrorLevelNo},
+		{4, WarnLevel, WarnLevelNo},
+		{5, InfoLevel, Info2LevelNo}, // notice: finer-grained INFO2
+		{6, InfoLevel, InfoLevelNo},
+		{7, DebugLevel, DebugLevelNo},
+		{8, "", 0},
+	}
+	for _, tc := range testCases {
+		got, gotNo := syslogSeverity(tc.in)
+		assert.Equal(t, tc.want, got, "syslog level %d", tc.in)
+		assert.Equal(t, tc.wantNo, gotNo, "syslog level %d number", tc.in)
+	}
+}
+
+func TestPinoSeverity(t *testing.T) {
 	testCases := []struct {
 		in   string
 		want string
 	}{
-		{"0", FatalLevel},
-		{"1", FatalLevel},
-		{"2", FatalLevel},
-		{"3", ErrorLevel},
-		{"4", WarnLevel},
-		{"5", InfoLevel},
-		{"6", InfoLevel},
-		{"7", DebugLevel},
-		{"8", ""},
+		{`{"level":10,"msg":"x"}`, TraceLevel},
+		{`{"level":20,"msg":"x"}`, DebugLevel},
+		{`{"level":30,"msg":"x"}`, InfoLevel},
+		{`{"level":40,"msg":"x"}`, WarnLevel},
+		{`{"level":50,"msg":"x"}`, ErrorLevel},
+		{`{"level":60,"msg":"x"}`, FatalLevel},
+		{`{"level":35,"msg":"x"}`, InfoLevel}, // custom in-between level
+		{`{"level":70,"msg":"x"}`, ""},        // out of range
+		{`{"level":300,"msg":"x"}`, ""},       // too many digits
+		{`{"level":"info","msg":"x"}`, ""},    // textual: handled by the decoder
+		{`{"msg":"no level here"}`, ""},       // absent
+		{`{"msg":"\"level\":30 quoted"}`, ""}, // escaped quote cannot match
 	}
 	for _, tc := range testCases {
-		assert.Equal(t, tc.want, getSyslogSeverityText(tc.in), "syslog level %s", tc.in)
+		assert.Equal(t, tc.want, pinoSeverity(tc.in), "line %s", tc.in)
 	}
 }
 

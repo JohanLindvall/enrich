@@ -83,6 +83,107 @@ func decodeStringNoCopyLaxValue(v *string, data []byte, i int) (int, error) {
 	return i, nil
 }
 
+func lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(v *mongoDate, data []byte, i int) (int, error) {
+	if i >= len(data) {
+		return i, unstable.ErrTruncated
+	}
+	if data[i] == 'n' {
+		return unstable.ExpectNull(data, i)
+	}
+	if data[i] != '{' {
+		return i, unstable.ErrExpectObject
+	}
+	i++
+	for first := true; ; first = false {
+		if i < len(data) && data[i] <= ' ' {
+			i++
+			if i < len(data) && data[i] <= ' ' {
+				i = unstable.SkipWSRun(data, i+1)
+			}
+		}
+		if i >= len(data) {
+			return i, unstable.ErrTruncated
+		}
+		if data[i] == '}' {
+			if first {
+				return i + 1, nil
+			}
+			return i, unstable.ErrInvalidJSON
+		}
+		var key string
+		var ni int
+		if i >= len(data) || data[i] != '"' {
+			return i, unstable.ErrInvalidJSON
+		}
+		ks := i + 1
+		if k := unstable.IndexCloseOrEscape(data[ks:]); ks+k < len(data) && data[ks+k] == '"' {
+			key, ni = unstable.UnsafeStr(data[ks:ks+k]), ks+k+1
+		} else {
+			var err error
+			if key, ni, err = unstable.ReadKey(data, i); err != nil {
+				return ni, err
+			}
+		}
+		i = ni
+		if i < len(data) && data[i] <= ' ' {
+			i++
+			if i < len(data) && data[i] <= ' ' {
+				i = unstable.SkipWSRun(data, i+1)
+			}
+		}
+		if i >= len(data) || data[i] != ':' {
+			return i, unstable.ErrExpectColon
+		}
+		i = i + 1
+		if i < len(data) && data[i] <= ' ' {
+			i++
+			if i < len(data) && data[i] <= ' ' {
+				i = unstable.SkipWSRun(data, i+1)
+			}
+		}
+		if i >= len(data) {
+			return i, unstable.ErrTruncated
+		}
+		switch key {
+		case "$date":
+			var lax time.Time
+			end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+			if err != nil {
+				end, err = unstable.SkipValue(data, i)
+				if err != nil {
+					return end, err
+				}
+			} else {
+				v.Date = lax
+			}
+			i = end
+
+		default:
+			end, err := unstable.SkipValue(data, i)
+			if err != nil {
+				return end, err
+			}
+			i = end
+		}
+		if i < len(data) && data[i] <= ' ' {
+			i++
+			if i < len(data) && data[i] <= ' ' {
+				i = unstable.SkipWSRun(data, i+1)
+			}
+		}
+		if i >= len(data) {
+			return i, unstable.ErrTruncated
+		}
+		if data[i] == '}' {
+			return i + 1, nil
+		}
+		if data[i] != ',' {
+			return i, unstable.ErrInvalidJSON
+		}
+		i++
+	}
+}
+
 func decodePtrInt64NoCopyLaxValue(v **int64, data []byte, i int) (int, error) {
 	if data[i] == 'n' {
 		end, err := unstable.ExpectNull(data, i)
@@ -415,7 +516,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				v.Severity = lax
 			}
 			i = end
-		case "traceid", "traceID", "TraceId", "TraceID", "request_id":
+		case "traceid", "traceID", "TraceId", "TraceID", "trace_id", "request_id":
 			var lax string
 			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 			if err != nil {
@@ -427,7 +528,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				v.TraceID = lax
 			}
 			i = end
-		case "spanid", "spanID", "SpanId", "SpanID":
+		case "spanid", "spanID", "SpanId", "SpanID", "span_id":
 			var lax string
 			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 			if err != nil {
@@ -569,6 +670,42 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				}
 			} else {
 				v.ResultDescription = lax
+			}
+			i = end
+		case "log":
+			var lax string
+			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+			if err != nil {
+				end, err = unstable.SkipValue(data, i)
+				if err != nil {
+					return end, err
+				}
+			} else {
+				v.Log = lax
+			}
+			i = end
+		case "t":
+			var lax mongoDate
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(&lax, data, i)
+			if err != nil {
+				end, err = unstable.SkipValue(data, i)
+				if err != nil {
+					return end, err
+				}
+			} else {
+				v.MongoTime = lax
+			}
+			i = end
+		case "s":
+			var lax string
+			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+			if err != nil {
+				end, err = unstable.SkipValue(data, i)
+				if err != nil {
+					return end, err
+				}
+			} else {
+				v.MongoSeverity = lax
 			}
 			i = end
 		case "response_code", "responseCode", "statusCode", "StatusCode":

@@ -3,12 +3,15 @@ package enrich
 import (
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // The normalized severity levels and their numeric equivalents. The numbers
 // follow the OpenTelemetry log SeverityNumber convention, where each level
 // starts a range of four (trace=1, debug=5, info=9, warn=13, error=17,
 // fatal=21); SeverityText maps any number in a range back to its level.
+// Info2LevelNo is the second slot of the info range, used for syslog's
+// "notice" severity.
 const (
 	TraceLevel   = "trace"
 	DebugLevel   = "debug"
@@ -19,6 +22,7 @@ const (
 	TraceLevelNo = 1
 	DebugLevelNo = 5
 	InfoLevelNo  = 9
+	Info2LevelNo = 10
 	WarnLevelNo  = 13
 	ErrorLevelNo = 17
 	FatalLevelNo = 21
@@ -79,18 +83,61 @@ func SeverityText(severity int) string {
 	return ""
 }
 
-func getSyslogSeverityText(severity string) string {
-	switch severity {
-	case "0", "1", "2":
-		return FatalLevel
-	case "3":
-		return ErrorLevel
-	case "4":
-		return WarnLevel
-	case "5", "6":
-		return InfoLevel
-	case "7":
+// syslogSeverity maps a syslog severity (0-7, the low three bits of the
+// priority) to a normalized level and OTLP severity number. Notice (5) maps
+// to info with the finer-grained INFO2 number.
+func syslogSeverity(level int) (string, int) {
+	switch level {
+	case 0, 1, 2: // emergency, alert, critical
+		return FatalLevel, FatalLevelNo
+	case 3:
+		return ErrorLevel, ErrorLevelNo
+	case 4:
+		return WarnLevel, WarnLevelNo
+	case 5: // notice
+		return InfoLevel, Info2LevelNo
+	case 6:
+		return InfoLevel, InfoLevelNo
+	case 7:
+		return DebugLevel, DebugLevelNo
+	}
+	return "", 0
+}
+
+// pinoSeverity maps the numeric levels of Pino/Bunyan (Node.js loggers) to
+// severities: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal.
+// The lax JSON decoder skips the numeric "level" value (the same key commonly
+// carries a string), so the number is fished out of the raw line when no
+// textual severity was found. An escaped quote cannot produce a false match:
+// the bytes of \"level\": contain a backslash before the colon.
+func pinoSeverity(message string) string {
+	const key = `"level":`
+	i := strings.Index(message, key)
+	if i < 0 {
+		return ""
+	}
+	rest := message[i+len(key):]
+	j := 0
+	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+		j++
+	}
+	if j == 0 || j > 2 {
+		return ""
+	}
+	n, _ := strconv.Atoi(rest[:j])
+	switch n / 10 {
+	case 1:
+		return TraceLevel
+	case 2:
 		return DebugLevel
+	case 3:
+		return InfoLevel
+	case 4:
+		return WarnLevel
+	case 5:
+		return ErrorLevel
+	case 6:
+		return FatalLevel
 	}
 	return ""
 }

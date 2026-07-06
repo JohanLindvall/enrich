@@ -16,7 +16,11 @@ public entry point `Parse(input string) *Result`.
   generator. Never edit by hand; edit `fields.go` and run `make generate`.
   CI fails if it is stale.
 - `lineparser.go` — the regex pattern table for plain-text formats (nginx,
-  klog, redis, envoy, tracebacks, ...) plus timestamp-layout parsing.
+  Apache, klog, redis, syslog, Lambda, Spring Boot, tracebacks, ...) plus
+  timestamp-layout parsing. `firstBytes` derives a first-byte prefilter from
+  each pattern's anchored prefix — a new anchored shape needs a classifier
+  case or it silently loses the cheap skip (the miss path is ~9x slower
+  without it). Unanchored entries must carry a `contain` prefilter.
 - `severity.go` — severity normalization, numeric levels, HTTP/gRPC/syslog/
   redis code-to-severity mapping.
 
@@ -38,6 +42,13 @@ public entry point `Parse(input string) *Result`.
   across year boundaries; the corresponding test skips the year.
 - **Envoy `response_code: 0`**: no `protocol` field → TCP proxying, info;
   `response_flags` DR/DC → client disconnect, warn.
+- **Pino numeric levels** are handled by a raw-line scan (`pinoSeverity`),
+  not the decoder: the "level" key must stay on the string Severity field
+  (textual levels are far more common) and lightning rejects a key mapped to
+  two fields.
+- **Severity numbers can be finer-grained than the text**: syslog notice is
+  info with SeverityNumber Info2 (10). Parse's final normalization keeps a
+  pre-set number, so don't reset SeverityNumber after applySubmatch.
 - **Test data is anonymized.** Log lines in tests use example.com/acme/base
   names, TEST-NET IPs (203.0.113.x), and all-zero dummy GUIDs. Keep it that
   way: never paste raw production log lines into tests — scrub domains,
@@ -51,6 +62,7 @@ make test       # go test -cover ./...
 make lint       # golangci-lint (config: .golangci.yml)
 make bench      # benchmarks
 make generate   # regenerate fields_unmarshal.go
+go test -run='^$' -fuzz=FuzzParse -fuzztime=30s .   # fuzz Parse after parser changes
 ```
 
 Local note: this machine has cgo disabled, so `-race` doesn't run here; CI

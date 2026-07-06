@@ -25,16 +25,25 @@ go get github.com/JohanLindvall/enrich
    ([lightning](https://github.com/JohanLindvall/lightning)) that accepts the
    common key spellings per logical field: `@t`/`@timestamp`/`timestamp`/`ts`/`time`
    for the timestamp; Serilog's `@l`, `@m`, `@mt`, `@x`, `@i`, `@sn`, `@sv`, `@sp`;
-   `traceid`/`traceID`/`TraceId`/`request_id`; Envoy's `response_code` and
-   `response_flags`; Azure diagnostic-log envelopes, including nested
-   `properties.log` payloads that are themselves enriched recursively.
+   `traceid`/`traceID`/`TraceId`/`trace_id`/`request_id`; Envoy's `response_code`
+   and `response_flags`; Azure diagnostic-log envelopes, including nested
+   `properties.log` payloads that are themselves enriched recursively; Docker
+   json-file records (the embedded `log` line is enriched recursively);
+   MongoDB structured logs (`{"t":{"$date":…},"s":"I"}`); and Pino/Bunyan
+   numeric levels (`"level":30`).
 2. **logfmt** — a key/value scan
    ([logfmt](https://github.com/JohanLindvall/logfmt)) picks up
-   `t`/`ts`/`time`/`timestamp` and `level`.
+   `t`/`ts`/`time`/`timestamp`, `level`, and trace correlation IDs
+   (`trace_id`/`span_id` spellings and W3C `traceparent`).
 3. **Pattern table** — regular expressions covering common plain-text formats:
-   nginx and other access logs, klog, redis, syslog-prefixed lines
-   (librdkafka), Go panics, .NET unhandled exceptions, Python tracebacks, and
-   Java exceptions.
+   nginx and Apache access/error logs, klog, redis, syslog (RFC3164, RFC5424,
+   and librdkafka's `<N>|` prefix), AWS Lambda, Spring Boot, Python logging,
+   Go panics, .NET unhandled exceptions, Python tracebacks, and Java
+   exceptions.
+
+`Result.Format` reports which strategy matched (`json`, `logfmt`, `pattern`,
+or empty for none), so callers can export enrichment hit-rate metrics and
+debug unparsed lines.
 
 ## Severity
 

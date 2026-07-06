@@ -12,12 +12,21 @@
 //     that recognizes the common key spellings for each logical field
 //     (e.g. @t/@timestamp/timestamp/ts/time for the timestamp, Serilog's
 //     @l/@m/@mt/@x, Envoy's response_code/response_flags, Azure
-//     diagnostic-log envelopes with nested properties.log payloads).
-//  2. logfmt: a key/value scan picks up t/ts/time/timestamp and level.
+//     diagnostic-log envelopes with nested properties.log payloads, Docker
+//     json-file records, MongoDB structured logs, and Pino/Bunyan numeric
+//     levels).
+//  2. logfmt: a key/value scan picks up t/ts/time/timestamp, level, and
+//     trace correlation IDs (trace_id/span_id spellings and W3C
+//     traceparent).
 //  3. Pattern table: a list of regular expressions covering common plain-text
-//     formats — nginx and other access logs, klog, redis, syslog-prefixed
-//     lines (librdkafka), Go panics, .NET unhandled exceptions, Python
+//     formats — nginx/Apache access and error logs, klog, redis, syslog
+//     (RFC3164, RFC5424, and librdkafka's <N>| prefix), AWS Lambda, Spring
+//     Boot, Python logging, Go panics, .NET unhandled exceptions, Python
 //     tracebacks, and Java exceptions.
+//
+// Result.Format reports which strategy matched (FormatJSON, FormatLogfmt,
+// FormatPattern, or FormatNone), so callers can count enrichment hit rates
+// and debug unparsed lines.
 //
 // # Severity
 //
