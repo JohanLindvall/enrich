@@ -75,6 +75,28 @@ func TestApplySubmatch_TimeWithoutLayouts(t *testing.T) {
 	assert.True(t, r.Time.IsZero())
 }
 
+func TestFirstBytes(t *testing.T) {
+	testCases := []struct {
+		re   string
+		want string
+	}{
+		{`^"?(?P<time>\d{4}-\d{2})`, `"0123456789`},
+		{`^(?P<time>\d{4}/\d{2})`, "0123456789"},
+		{`^\d+:[XCSM]`, "0123456789"},
+		{`^\[stuff`, "["},
+		{`^<(?P<syslogpri>\d+)>`, "<"},
+		{`^%(?P<sysloglevel>[0-7])`, "%"},
+		{`^(?P<level>[IWEF])`, "IWEF"},
+		{`^(?P<level>INFO|WARN|ERROR|DEBUG|TRACE|FATAL):`, "IWEDTF"},
+		{`(?s)^Unhandled exception\.`, "U"},
+		{`^[^[\s-]+\s-\s`, ""}, // unclassified anchored shape
+		{`unanchored`, ""},
+	}
+	for _, tc := range testCases {
+		assert.Equal(t, tc.want, firstBytes(tc.re), "regex %s", tc.re)
+	}
+}
+
 func TestWarnParseFailure_RateLimited(t *testing.T) {
 	clp := compiledLineParsers[0]
 	before := clp.lastWrn.Load()

@@ -118,6 +118,7 @@ func init() {
 // "" (no cheap test) for prefixes it does not recognize; when adding a table
 // entry with a new anchored shape, extend this classifier.
 func firstBytes(re string) string {
+	re = strings.TrimPrefix(re, `(?s)`) // flags don't change the first byte
 	switch {
 	case strings.HasPrefix(re, `^"?(?P<time>\d{4}`): // quoted or bare timestamp
 		return `"0123456789`
