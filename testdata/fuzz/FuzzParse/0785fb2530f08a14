@@ -1,0 +1,2 @@
+go test fuzz v1
+string("0:娛000\xef\x96\xee\xb6\ue87e询\xf1\x83\xb4\xf2\xac\xd0\n[\xe1\xab\xfb0000000000000000ꍏ")

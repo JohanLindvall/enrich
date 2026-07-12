@@ -25,7 +25,15 @@ allocation-free).
   case or it silently loses the cheap skip (the miss path is ~9x slower
   without it). Unanchored entries must carry a `contain` prefilter.
 - `severity.go` — severity normalization, numeric levels, HTTP/gRPC/syslog/
-  redis code-to-severity mapping.
+  redis code-to-severity mapping. `severityLUT` **is** the normalizer, not a
+  cache in front of one: the set of level spellings is finite, so every input
+  is decided in O(1) (an unknown word used to cost ~330 ns walking 8 regexes;
+  it now costs ~12 ns). The regexes live on in `severity_test.go` as an
+  oracle, and a 500k-input randomized differential test pins the table to
+  them — extend the table and that test together.
+- `testdata/fuzz/FuzzParse/` — the corpus the fuzzer accumulated. `go test`
+  replays every entry as a seed, so it is a regression suite; add to it by
+  running the fuzzer and copying new finds out of `$(go env GOCACHE)/fuzz`.
 
 ## Invariants and gotchas
 
@@ -50,9 +58,14 @@ allocation-free).
   not the decoder: the "level" key must stay on the string Severity field
   (textual levels are far more common) and lightning rejects a key mapped to
   two fields.
-- **Severity numbers can be finer-grained than the text**: syslog notice is
-  info with SeverityNumber Info2 (10). Parse's final normalization keeps a
-  pre-set number, so don't reset SeverityNumber after applySubmatch.
+- **Severity numbers can be finer-grained than the text**: the OTLP numbers
+  give each level a range of four (`InfoLevelNo`..`Info4LevelNo`), so syslog
+  notice is info with SeverityNumber Info2 (10). Parse's final normalization
+  keeps a pre-set number, so don't reset SeverityNumber after applySubmatch.
+- **Don't add a dynamic severity cache.** It cannot beat the LUT's ~20 ns on
+  hits, it would need locking (the package has no mutable state today), and it
+  would be keyed by attacker-influenced log content — an unbounded map that a
+  flood of junk level tokens grows without limit.
 - **The package never logs.** A library writing to the global slog is
   unconfigurable by its callers; an unparseable line is reported through
   `Result.Format` and a zero `Result.Time` instead. Don't reintroduce it.

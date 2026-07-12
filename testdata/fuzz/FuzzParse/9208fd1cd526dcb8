@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x1b[0mERROR\x1b[0m\xed0\xe2\xe4\x9d 00000")

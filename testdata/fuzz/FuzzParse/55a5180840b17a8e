@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\xec\xbb0\xe4\x94\xe4\x85ǄϴّӇ˺߆͏:˛Эӂ\n0ν\xe8\xb50߱ͳ")

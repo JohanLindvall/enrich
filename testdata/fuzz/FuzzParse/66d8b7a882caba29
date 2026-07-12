@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x1b[y\xce\xe4\xb6\x1931mERROR\x1b[0m colored")

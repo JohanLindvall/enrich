@@ -1,0 +1,2 @@
+go test fuzz v1
+string("<134>1 2026-07-06T12:0\x13:00.123Z host app - - - event")

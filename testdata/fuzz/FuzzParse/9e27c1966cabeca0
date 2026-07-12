@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Unhandled exception. 000AAA \xff\xffAAAAAAAAAAAAA\n AAAAAAAAAAAAAAAAAAA")

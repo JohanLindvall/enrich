@@ -1,53 +1,65 @@
 package enrich
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 )
 
-// The normalized severity levels and their numeric equivalents. The numbers
-// follow the OpenTelemetry log SeverityNumber convention, where each level
-// starts a range of four (trace=1, debug=5, info=9, warn=13, error=17,
-// fatal=21); SeverityFromNumber maps any number in a range back to its level.
-// Info2LevelNo is the second slot of the info range, used for syslog's
-// "notice" severity.
+// The six normalized severity levels. Parse reports one of these in
+// Result.Severity, and they are the only values SeverityFromText returns.
 const (
-	TraceLevel   = "trace"
-	DebugLevel   = "debug"
-	InfoLevel    = "info"
-	WarnLevel    = "warn"
-	ErrorLevel   = "error"
-	FatalLevel   = "fatal"
-	TraceLevelNo = 1
-	DebugLevelNo = 5
-	InfoLevelNo  = 9
-	Info2LevelNo = 10
-	WarnLevelNo  = 13
-	ErrorLevelNo = 17
-	FatalLevelNo = 21
+	TraceLevel = "trace"
+	DebugLevel = "debug"
+	InfoLevel  = "info"
+	WarnLevel  = "warn"
+	ErrorLevel = "error"
+	FatalLevel = "fatal"
 )
 
-var normalizeReg = []struct {
-	regexp  *regexp.Regexp
-	replace string
-	number  int
-}{
-	{regexp.MustCompile(`^(?i)(trace?|trc)\d*$`), TraceLevel, TraceLevelNo},
-	{regexp.MustCompile(`^(?i)(d|debug?|dbg)\d*$`), DebugLevel, DebugLevelNo},
-	{regexp.MustCompile(`^(?i)(i(nfo?(rmation(al)?)?)?)$`), InfoLevel, InfoLevelNo},
-	{regexp.MustCompile(`^(?i)normal$`), InfoLevel, InfoLevelNo},
-	{regexp.MustCompile(`^(?i)log$`), InfoLevel, InfoLevelNo},
-	{regexp.MustCompile(`^(?i)(w(a?rn(ing)?)?)$`), WarnLevel, WarnLevelNo},
-	{regexp.MustCompile(`^(?i)(e(rr(or)?)?)$`), ErrorLevel, ErrorLevelNo},
-	{regexp.MustCompile(`^(?i)(fatal|f(tl)?|crit(ical)?|panic|pnc)$`), FatalLevel, FatalLevelNo},
-}
+// The OpenTelemetry log SeverityNumber values, reported in
+// Result.SeverityNumber. Each level owns a range of four, so a producer can
+// grade within a level: syslog's "notice", for instance, is an info that
+// outranks a plain one, and is reported as Info2LevelNo. SeverityFromNumber
+// maps any number in a range back to that range's level.
+const (
+	TraceLevelNo = iota + 1 // 1
+	Trace2LevelNo
+	Trace3LevelNo
+	Trace4LevelNo
+	DebugLevelNo // 5
+	Debug2LevelNo
+	Debug3LevelNo
+	Debug4LevelNo
+	InfoLevelNo // 9
+	Info2LevelNo
+	Info3LevelNo
+	Info4LevelNo
+	WarnLevelNo // 13
+	Warn2LevelNo
+	Warn3LevelNo
+	Warn4LevelNo
+	ErrorLevelNo // 17
+	Error2LevelNo
+	Error3LevelNo
+	Error4LevelNo
+	FatalLevelNo // 21
+	Fatal2LevelNo
+	Fatal3LevelNo
+	Fatal4LevelNo
+)
 
-// severityLUT short-circuits the regex walk for the common level spellings:
-// the fixed alternatives of each pattern, keyed lowercase (the patterns are
-// case-insensitive, which for the LUT's ASCII-only keys is plain ASCII
-// folding). Forms it misses — digit-suffixed levels like "trace2", non-ASCII
-// input — fall through to the regexes, so the result is always identical.
+// severityLUT enumerates every spelling a level can have, keyed lowercase
+// (the recognized spellings are ASCII, so folding is a plain case flip).
+//
+// It is the whole implementation, not a cache in front of one: the set of
+// level spellings is finite, so a lookup table decides every input in O(1) —
+// including the ones that name no level, which a regex walk used to spend
+// ~330 ns rejecting. severity_test.go keeps the original regexes as an oracle
+// and differential-tests this table against them.
+//
+// The odd-looking "infrmation"/"wrning" entries are not typos: the original
+// patterns (i(nfo?(rmation(al)?)?)? and w(a?rn(ing)?)?) accept them, and this
+// table reproduces that language exactly.
 var severityLUT = map[string]struct {
 	text string
 	no   int
@@ -66,10 +78,34 @@ func init() {
 	}
 	add(TraceLevel, TraceLevelNo, "trac", "trace", "trc")
 	add(DebugLevel, DebugLevelNo, "d", "debu", "debug", "dbg")
-	add(InfoLevel, InfoLevelNo, "i", "inf", "info", "information", "informational", "normal", "log")
-	add(WarnLevel, WarnLevelNo, "w", "wrn", "warn", "warning")
+	add(InfoLevel, InfoLevelNo, "i", "inf", "info", "infrmation", "infrmational",
+		"information", "informational", "normal", "log")
+	add(WarnLevel, WarnLevelNo, "w", "wrn", "warn", "wrning", "warning")
 	add(ErrorLevel, ErrorLevelNo, "e", "err", "error")
 	add(FatalLevel, FatalLevelNo, "fatal", "f", "ftl", "crit", "critical", "panic", "pnc")
+}
+
+// severityInitials are the first letters of every entry in severityLUT. A
+// single byte test rejects the overwhelming majority of non-levels (any word
+// the pattern table happened to capture as a level) before hashing anything.
+const severityInitials = "tdinlwefcp"
+
+// lookupSeverity does the case-insensitive LUT lookup without allocating: the
+// lowercased key is built on the stack.
+func lookupSeverity(s string) (string, int, bool) {
+	if len(s) == 0 || len(s) > maxSeverityKey {
+		return "", 0, false
+	}
+	var buf [maxSeverityKey]byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		buf[i] = c
+	}
+	v, ok := severityLUT[string(buf[:len(s)])]
+	return v.text, v.no, ok
 }
 
 // SeverityFromText normalizes any of the level spellings that appear in the
@@ -80,22 +116,22 @@ func SeverityFromText(input string) (string, int) {
 	if input == "" {
 		return "", 0
 	}
-	if len(input) <= maxSeverityKey {
-		var buf [maxSeverityKey]byte
-		for i := 0; i < len(input); i++ {
-			c := input[i]
-			if 'A' <= c && c <= 'Z' {
-				c += 'a' - 'A'
-			}
-			buf[i] = c
-		}
-		if v, ok := severityLUT[string(buf[:len(input)])]; ok {
-			return v.text, v.no
-		}
+	// No level begins with any other letter, so one byte test rejects most
+	// non-levels outright. (|0x20 lowercases ASCII letters; every other byte,
+	// including the lead byte of a multi-byte rune, maps outside the set.)
+	if strings.IndexByte(severityInitials, input[0]|0x20) < 0 {
+		return "", 0
 	}
-	for _, reg := range normalizeReg {
-		if reg.regexp.MatchString(input) {
-			return reg.replace, reg.number
+
+	if text, no, ok := lookupSeverity(input); ok {
+		return text, no
+	}
+
+	// Only the trace and debug spellings take a numeric suffix ("trace2",
+	// MongoDB's "D1".."D5"); an "info2" is deliberately not info.
+	if trimmed := strings.TrimRight(input, "0123456789"); len(trimmed) < len(input) {
+		if text, no, ok := lookupSeverity(trimmed); ok && (text == TraceLevel || text == DebugLevel) {
+			return text, no
 		}
 	}
 	return "", 0

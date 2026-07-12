@@ -51,7 +51,9 @@ debug unparsed lines.
 Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`.
 `SeverityFromText` maps any spelling in the wild ("WRN", "Warning", "w",
 "Information") to a canonical level plus its OpenTelemetry severity number;
-`SeverityFromNumber` is the inverse. When a line carries no explicit level,
+`SeverityFromNumber` is the inverse (the numbers give each level a range of
+four, so `Info2LevelNo` is an info that outranks a plain one — which is how
+syslog's *notice* is represented). When a line carries no explicit level,
 HTTP response codes and gRPC status codes map to a severity
 (`HTTPStatusSeverity`): 1xx–3xx → info, 5xx → warn, and 4xx depends on how the
 line reports it — `StatusObserved` (an access log, → warn) or `StatusFailure`

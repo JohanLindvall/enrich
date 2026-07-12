@@ -1,0 +1,2 @@
+go test fuzz v1
+string("Unhandled exception. 0Exception\n")

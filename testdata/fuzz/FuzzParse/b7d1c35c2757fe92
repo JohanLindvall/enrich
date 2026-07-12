@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"AAAAA\":00,\"time\":0000000A\x1aa\xeda=\x18a\xab\xfaaaA000000aaaaaaAaaaaaaa")

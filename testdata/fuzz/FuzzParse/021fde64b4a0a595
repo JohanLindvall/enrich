@@ -1,0 +1,2 @@
+go test fuzz v1
+string("traceparent=00-0A0\xed\xed00000A00AA0A0AA000a0a0a0000-00A000AA0AA000A0-00")

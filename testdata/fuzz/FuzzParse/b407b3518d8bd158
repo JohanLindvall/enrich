@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x1b_31mERROR\x1b[0m colored")
