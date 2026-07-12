@@ -129,3 +129,73 @@ func TestRareByteInContain(t *testing.T) {
 		assert.Contains(t, clp.contain, string(clp.rare), "contain %q", clp.contain)
 	}
 }
+
+// TestPosGatesNeverRejectMatches pins the positional gates to their regexes:
+// on lines of every timestamp family (and quoted/short/empty edge cases), a
+// gated parser's gate may only reject lines its regex would reject anyway.
+func TestPosGatesNeverRejectMatches(t *testing.T) {
+	lines := []string{
+		`2026/07/11 10:00:00 error contacting upstream`,
+		`2026/07/11 10:00:00.123456 message`,
+		`2026-07-11 10:00:00.123  WARN 1 --- [main] message`,
+		`2026-07-11 10:00:00,123 message`,
+		`2026-07-11T10:00:00.123Z info message`,
+		`2026-07-11T10:00:00+02:00 ERROR message`,
+		`"2026-07-11T10:00:00.123Z" message`,
+		`"2026-07-11 10:00:00.123 +02:00" [x] INFO: message`,
+		`2026-07-11 10:00:00 message`,
+		`2026-07`, `"2026`, `x`, ``,
+	}
+	for _, clp := range compiledLineParsers {
+		if len(clp.gates) == 0 {
+			continue
+		}
+		for _, line := range lines {
+			if clp.re.MatchString(line) {
+				var r Result
+				assert.True(t, clp.apply(&r, line), "gate rejected a matching line: re=%s line=%q", clp.re, line)
+			}
+		}
+	}
+}
+
+// TestRequiredByteNeverRejectsMatches pins requiredByte to its regex: on a
+// corpus covering every pattern family, a line the regex matches must contain
+// the derived byte (the gate may only reject lines the regex rejects too).
+func TestRequiredByteNeverRejectsMatches(t *testing.T) {
+	lines := []string{
+		`2026/07/11 10:00:00 [error] worker process exited`,
+		`2026/07/11 10:00:00 error contacting upstream`,
+		`2026-07-11T10:00:00.123Z info message`,
+		"2026-07-11T10:00:00.123Z\t00000000-0000-0000-0000-000000000001\tERROR\tmessage",
+		`2026-07-11 10:00:00.123  WARN 1 --- [main] message`,
+		`[2026-07-11 10:00:00,123][42][info] message`,
+		`203.0.113.1 - - [11/Jul/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612`,
+		`I0711 10:00:00.123456 1 main.go:42] started`,
+		`2026/07/11 10:00:00 GET / "curl/8" 200 12`,
+		`1:M 11 Jul 2026 10:00:00.123 * Ready to accept connections`,
+		`[Thu Jun 27 11:55:44.569531 2024] [core:error] [pid 42] message`,
+		`2026-07-11 10:00:00,123 - app.module - ERROR - failed`,
+		`<134>1 2026-07-11T10:00:00.123Z host app 1234 ID47 - event`,
+		`<11>Jul 11 10:00:00 host app[42]: failed`,
+		`[ERROR] something`,
+		`ERROR: something`,
+		`audit: type=Warn msg=denied`,
+		`%4|1720686000.123|FAIL|rdkafka#producer-1| down`,
+		`2026-07-11 10:00:00 message`,
+		`panic: runtime error: invalid memory address or nil pointer dereference`,
+		"Unhandled exception. System.NullReferenceException: x\n at Y",
+		"Traceback (most recent call last):\n  File \"x.py\"",
+		"java.lang.NullPointerException: x\n\tat com.example.Y",
+	}
+	for _, clp := range compiledLineParsers {
+		if clp.req == 0 {
+			continue
+		}
+		for _, line := range lines {
+			if clp.re.MatchString(line) {
+				assert.Contains(t, line, string(clp.req), "required byte %q rejects a matching line: re=%s line=%q", clp.req, clp.re, line)
+			}
+		}
+	}
+}

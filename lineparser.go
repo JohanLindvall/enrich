@@ -3,6 +3,7 @@ package enrich
 import (
 	"log/slog"
 	"regexp"
+	"regexp/syntax"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,9 +20,22 @@ type compiledLineParser struct {
 	contain string
 	first   string // bytes the line must start with; empty means no cheap test
 	rare    byte   // rarest byte of contain (0: none); gates the substring scan
+	req     byte   // a byte every regex match must contain (0: none)
+	quoted  bool   // pattern allows one leading '"', shifting the gates by one
+	gates   []posGate
 	re      *regexp.Regexp
 	ts      []string
 	lastWrn atomic.Int64 // unix nanos of the last parse-failure warning
+}
+
+// posGate is a fixed-position byte requirement derived from a pattern's
+// anchored timestamp prefix: a matching line must carry one of set's bytes at
+// idx. Two of these distinguish the timestamp families (slash vs dash date,
+// 'T' vs space separator) for a few byte compares, sparing the failing
+// patterns their full regex run.
+type posGate struct {
+	idx int
+	set string
 }
 
 var ymdSlashLayouts = []string{"2006/01/02 15:04:05.999999999"}
@@ -104,48 +118,126 @@ var compiledLineParsers []*compiledLineParser
 
 func init() {
 	for _, p := range lineParsers {
+		quoted, gates := posGates(p.re)
 		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
 			contain: p.contain,
 			first:   firstBytes(p.re),
 			rare:    rareByte(p.contain),
+			req:     requiredByte(p.re),
+			quoted:  quoted,
+			gates:   gates,
 			re:      regexp.MustCompile(p.re),
 			ts:      p.ts,
 		})
 	}
 }
 
+// posGates derives fixed-position byte requirements from a pattern's anchored
+// timestamp prefix. Like firstBytes it recognizes the shapes used in the
+// table and returns nothing for the rest; extend it alongside new entries.
+// quoted reports a `^"?` prefix, which shifts every gate by one on lines that
+// do start with a quote.
+func posGates(re string) (quoted bool, gates []posGate) {
+	re = strings.TrimPrefix(re, `(?s)`)
+	if strings.HasPrefix(re, `^"?`) {
+		quoted = true
+		re = `^` + re[len(`^"?`):]
+	}
+	switch {
+	case strings.HasPrefix(re, `^(?P<time>\d{4}/\d{2}/\d{2} `):
+		return quoted, []posGate{{4, "/"}, {10, " "}}
+	case strings.HasPrefix(re, `^(?P<time>\d{4}-\d{2}-\d{2}T`):
+		return quoted, []posGate{{4, "-"}, {10, "T"}}
+	case strings.HasPrefix(re, `^(?P<time>\d{4}-\d{2}-\d{2} `):
+		return quoted, []posGate{{4, "-"}, {10, " "}}
+	}
+	return false, nil
+}
+
+// byteScore ranks how unlikely a byte is in log text (lower = rarer): control
+// chars, then punctuation, then digits, then letters. Both gate derivations
+// pick their cheapest-to-test byte with it.
+func byteScore(c byte) int {
+	switch {
+	case c < 0x20 || c == 0x7f: // control (\t, \n)
+		return 0
+	case c == '|' || c == '=' || c == '<' || c == '>' || c == '%':
+		return 1
+	case strings.IndexByte("()[]{}#$&*+^~\"'`@\\", c) >= 0:
+		return 2
+	case c == ':' || c == ';' || c == '_' || c == '-' || c == '/':
+		return 3
+	case c >= '0' && c <= '9':
+		return 4
+	case c >= 'A' && c <= 'Z':
+		return 5
+	default: // lowercase, space, '.', ','
+		return 6
+	}
+}
+
 // rareByte picks the byte of a multi-byte contain needle least likely to occur
-// in log text (control chars, then punctuation, then digits, then letters), so
-// apply can reject most lines with one SIMD byte scan instead of a substring
-// search. A needle containing its rare byte is implied by the needle being
-// present, so the gate never changes the outcome. Returns 0 (no gate) for
-// needles of one byte, where Contains is already a single byte scan.
+// in log text, so apply can reject most lines with one SIMD byte scan instead
+// of a substring search. A needle containing its rare byte is implied by the
+// needle being present, so the gate never changes the outcome. Returns 0 (no
+// gate) for needles of one byte, where Contains is already a single byte scan.
 func rareByte(contain string) byte {
 	if len(contain) < 2 {
 		return 0
 	}
-	score := func(c byte) int {
-		switch {
-		case c < 0x20 || c == 0x7f: // control (\t, \n)
-			return 0
-		case c == '|' || c == '=' || c == '<' || c == '>' || c == '%':
-			return 1
-		case strings.IndexByte("()[]{}#$&*+^~\"'`@\\", c) >= 0:
-			return 2
-		case c == ':' || c == ';' || c == '_' || c == '-' || c == '/':
-			return 3
-		case c >= '0' && c <= '9':
-			return 4
-		case c >= 'A' && c <= 'Z':
-			return 5
-		default: // lowercase, space, '.', ','
-			return 6
-		}
-	}
 	rare := contain[0]
 	for i := 1; i < len(contain); i++ {
-		if score(contain[i]) < score(rare) {
+		if byteScore(contain[i]) < byteScore(rare) {
 			rare = contain[i]
+		}
+	}
+	return rare
+}
+
+// requiredByte returns the rarest ASCII byte that every match of the pattern
+// must contain, or 0 when none can be proven. It walks the parsed syntax tree
+// collecting literal bytes in mandatory positions — concatenations, captures
+// and min>=1 repeats; alternations and optional groups prove nothing. The
+// payoff is on patterns that fail late (e.g. a timestamp matches but a later
+// literal is absent): one byte scan replaces the whole backtracking run.
+func requiredByte(pattern string) byte {
+	parsed, err := syntax.Parse(pattern, syntax.Perl)
+	if err != nil {
+		return 0
+	}
+	var req []byte
+	var walk func(*syntax.Regexp)
+	walk = func(r *syntax.Regexp) {
+		switch r.Op {
+		case syntax.OpLiteral:
+			if r.Flags&syntax.FoldCase != 0 {
+				return // case-folded literals match multiple bytes
+			}
+			for _, ru := range r.Rune {
+				if ru < 128 {
+					req = append(req, byte(ru))
+				}
+			}
+		case syntax.OpConcat, syntax.OpCapture, syntax.OpPlus:
+			for _, sub := range r.Sub {
+				walk(sub)
+			}
+		case syntax.OpRepeat:
+			if r.Min >= 1 {
+				for _, sub := range r.Sub {
+					walk(sub)
+				}
+			}
+		}
+	}
+	walk(parsed)
+	if len(req) == 0 {
+		return 0
+	}
+	rare := req[0]
+	for _, c := range req[1:] {
+		if byteScore(c) < byteScore(rare) {
+			rare = c
 		}
 	}
 	return rare
@@ -196,6 +288,17 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 	if clp.first != "" && (message == "" || strings.IndexByte(clp.first, message[0]) < 0) {
 		return false
 	}
+	if len(clp.gates) > 0 {
+		off := 0
+		if clp.quoted && len(message) > 0 && message[0] == '"' {
+			off = 1
+		}
+		for _, g := range clp.gates {
+			if i := g.idx + off; i >= len(message) || strings.IndexByte(g.set, message[i]) < 0 {
+				return false
+			}
+		}
+	}
 	if clp.contain != "" {
 		if clp.rare != 0 && strings.IndexByte(message, clp.rare) < 0 {
 			return false
@@ -203,6 +306,10 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 		if !strings.Contains(message, clp.contain) {
 			return false
 		}
+	}
+
+	if clp.req != 0 && strings.IndexByte(message, clp.req) < 0 {
+		return false
 	}
 
 	match := clp.re.FindStringSubmatch(message)

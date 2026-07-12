@@ -33,3 +33,13 @@ func BenchmarkParseMiss(b *testing.B) {
 		Parse(missLine)
 	}
 }
+
+// A Go-log-style plain-text line that resolves via the pattern table (the
+// timestamp-family positional gates decide how many regexes run).
+var patternLine = `2026/07/11 10:00:00 error contacting upstream: connection refused`
+
+func BenchmarkParsePattern(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		Parse(patternLine)
+	}
+}
