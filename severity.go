@@ -43,16 +43,58 @@ var normalizeReg = []struct {
 	{regexp.MustCompile(`^(?i)(fatal|f(tl)?|crit(ical)?|panic|pnc)$`), FatalLevel, FatalLevelNo},
 }
 
-// NormalizeSeverity normalizes log severity to a set of predefined values
-func NormalizeSeverity(input string) (string, int) {
-	if input != "" {
-		for _, reg := range normalizeReg {
-			if reg.regexp.MatchString(input) {
-				return reg.replace, reg.number
-			}
+// severityLUT short-circuits the regex walk for the common level spellings:
+// the fixed alternatives of each pattern, keyed lowercase (the patterns are
+// case-insensitive, which for the LUT's ASCII-only keys is plain ASCII
+// folding). Forms it misses — digit-suffixed levels like "trace2", non-ASCII
+// input — fall through to the regexes, so the result is always identical.
+var severityLUT = map[string]struct {
+	text string
+	no   int
+}{}
+
+const maxSeverityKey = len("informational")
+
+func init() {
+	add := func(text string, no int, forms ...string) {
+		for _, f := range forms {
+			severityLUT[f] = struct {
+				text string
+				no   int
+			}{text, no}
 		}
 	}
+	add(TraceLevel, TraceLevelNo, "trac", "trace", "trc")
+	add(DebugLevel, DebugLevelNo, "d", "debu", "debug", "dbg")
+	add(InfoLevel, InfoLevelNo, "i", "inf", "info", "information", "informational", "normal", "log")
+	add(WarnLevel, WarnLevelNo, "w", "wrn", "warn", "warning")
+	add(ErrorLevel, ErrorLevelNo, "e", "err", "error")
+	add(FatalLevel, FatalLevelNo, "fatal", "f", "ftl", "crit", "critical", "panic", "pnc")
+}
 
+// NormalizeSeverity normalizes log severity to a set of predefined values
+func NormalizeSeverity(input string) (string, int) {
+	if input == "" {
+		return "", 0
+	}
+	if len(input) <= maxSeverityKey {
+		var buf [maxSeverityKey]byte
+		for i := 0; i < len(input); i++ {
+			c := input[i]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			buf[i] = c
+		}
+		if v, ok := severityLUT[string(buf[:len(input)])]; ok {
+			return v.text, v.no
+		}
+	}
+	for _, reg := range normalizeReg {
+		if reg.regexp.MatchString(input) {
+			return reg.replace, reg.number
+		}
+	}
 	return "", 0
 }
 

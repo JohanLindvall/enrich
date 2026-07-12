@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -166,5 +167,36 @@ func TestGetRedisSeverityText(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		assert.Equal(t, tc.want, getRedisSeverityText(tc.in), "redis level %q", tc.in)
+	}
+}
+
+// TestSeverityLUTMatchesRegexes pins the fast-path LUT to the regex table: for
+// every LUT key and its case variants, both paths must agree, and forms the
+// LUT misses (digit suffixes, unknown words) must reach the regexes unchanged.
+func TestSeverityLUTMatchesRegexes(t *testing.T) {
+	regexWalk := func(input string) (string, int) {
+		for _, reg := range normalizeReg {
+			if reg.regexp.MatchString(input) {
+				return reg.replace, reg.number
+			}
+		}
+		return "", 0
+	}
+	variants := func(s string) []string {
+		return []string{s, strings.ToUpper(s), strings.ToTitle(s[:1]) + s[1:]}
+	}
+	for key := range severityLUT {
+		for _, v := range variants(key) {
+			gotText, gotNo := NormalizeSeverity(v)
+			wantText, wantNo := regexWalk(v)
+			assert.Equal(t, wantText, gotText, "severity %q", v)
+			assert.Equal(t, wantNo, gotNo, "severity %q", v)
+		}
+	}
+	for _, v := range []string{"trace2", "TRC1", "dbg3", "debug10", "informative", "warned", "eror", "x", "", "įnfo", "informationall"} {
+		gotText, gotNo := NormalizeSeverity(v)
+		wantText, wantNo := regexWalk(v)
+		assert.Equal(t, wantText, gotText, "severity %q", v)
+		assert.Equal(t, wantNo, gotNo, "severity %q", v)
 	}
 }

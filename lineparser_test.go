@@ -116,3 +116,16 @@ func TestApplySubmatch_BadTime(t *testing.T) {
 	clp.applySubmatch(&r, "time", "garbage", "line")
 	assert.True(t, r.Time.IsZero())
 }
+
+// TestRareByteInContain pins the gate's correctness invariant: the rare byte
+// is always a byte of the contain needle, so needle-present implies
+// gate-passes and the gate can never reject a line the needle would accept.
+func TestRareByteInContain(t *testing.T) {
+	for _, clp := range compiledLineParsers {
+		if clp.rare == 0 {
+			assert.Less(t, len(clp.contain), 2, "contain %q: multi-byte needles must gate", clp.contain)
+			continue
+		}
+		assert.Contains(t, clp.contain, string(clp.rare), "contain %q", clp.contain)
+	}
+}

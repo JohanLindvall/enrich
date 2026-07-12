@@ -173,7 +173,18 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 // therefore retain the corresponding input strings; copy the fields you need if
 // you want the large input buffers to be collected sooner.
 func Parse(input string) *Result {
-	result := Result{Body: input}
+	result := new(Result)
+	ParseInto(input, result)
+	return result
+}
+
+// ParseInto is Parse without the per-call allocation: it resets *result and
+// fills it in place, for callers that process many lines and can reuse one
+// Result. It reports whether any parsing strategy matched (result.Format !=
+// FormatNone). The aliasing caveats of Parse apply — the filled fields share
+// memory with input.
+func ParseInto(input string, result *Result) bool {
+	*result = Result{Body: input}
 	message := removeANSICodes(input)
 
 	// The decoder only reads messageBytes (nocopy fields alias it), so alias the
@@ -203,7 +214,7 @@ func Parse(input string) *Result {
 		result.SeverityNumber = no
 	}
 
-	return &result
+	return result.Format != FormatNone
 }
 
 // enrichFromJSON fills the result from a successfully decoded JSON log line.
@@ -215,7 +226,9 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 	// Docker json-file records carry the original line in a top-level "log"
 	// string; enrich it recursively, top-level scalars again winning.
 	if f.Log != "" {
-		result.mergeNested(Parse(f.Log))
+		var nested Result
+		ParseInto(f.Log, &nested)
+		result.mergeNested(&nested)
 	}
 
 	if f.ResponseStatus.Code != nil {
@@ -247,7 +260,9 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 func (result *Result) applyProperties(p *enrichProperties) *int64 {
 	switch {
 	case p.Log != "":
-		result.mergeNested(Parse(p.Log))
+		var nested Result
+		ParseInto(p.Log, &nested)
+		result.mergeNested(&nested)
 	case p.Response != "":
 		var hr httpResponse
 		if err := hr.UnmarshalJSON([]byte(p.Response)); err == nil && hr.StatusCode != nil {
@@ -374,11 +389,16 @@ func (result *Result) enrichFromPatterns(message string) bool {
 		}
 	}
 
-	if i := strings.Index(message, "traceparent"); i >= 0 {
-		if m := traceparentRE.FindStringSubmatch(message[i:]); m != nil {
-			if t, s := parseTraceparent(m[1]); t != "" {
-				result.TraceID, result.SpanID = t, s
-				matched = true
+	// traceparentRE requires "traceparent[:=]", so a line with neither ':'
+	// nor '=' cannot match; both probes are SIMD byte scans, far cheaper than
+	// the substring search on lines full of 't's.
+	if strings.IndexByte(message, '=') >= 0 || strings.IndexByte(message, ':') >= 0 {
+		if i := strings.Index(message, "traceparent"); i >= 0 {
+			if m := traceparentRE.FindStringSubmatch(message[i:]); m != nil {
+				if t, s := parseTraceparent(m[1]); t != "" {
+					result.TraceID, result.SpanID = t, s
+					matched = true
+				}
 			}
 		}
 	}

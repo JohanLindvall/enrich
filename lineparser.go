@@ -18,6 +18,7 @@ type lineParser struct {
 type compiledLineParser struct {
 	contain string
 	first   string // bytes the line must start with; empty means no cheap test
+	rare    byte   // rarest byte of contain (0: none); gates the substring scan
 	re      *regexp.Regexp
 	ts      []string
 	lastWrn atomic.Int64 // unix nanos of the last parse-failure warning
@@ -106,10 +107,48 @@ func init() {
 		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
 			contain: p.contain,
 			first:   firstBytes(p.re),
+			rare:    rareByte(p.contain),
 			re:      regexp.MustCompile(p.re),
 			ts:      p.ts,
 		})
 	}
+}
+
+// rareByte picks the byte of a multi-byte contain needle least likely to occur
+// in log text (control chars, then punctuation, then digits, then letters), so
+// apply can reject most lines with one SIMD byte scan instead of a substring
+// search. A needle containing its rare byte is implied by the needle being
+// present, so the gate never changes the outcome. Returns 0 (no gate) for
+// needles of one byte, where Contains is already a single byte scan.
+func rareByte(contain string) byte {
+	if len(contain) < 2 {
+		return 0
+	}
+	score := func(c byte) int {
+		switch {
+		case c < 0x20 || c == 0x7f: // control (\t, \n)
+			return 0
+		case c == '|' || c == '=' || c == '<' || c == '>' || c == '%':
+			return 1
+		case strings.IndexByte("()[]{}#$&*+^~\"'`@\\", c) >= 0:
+			return 2
+		case c == ':' || c == ';' || c == '_' || c == '-' || c == '/':
+			return 3
+		case c >= '0' && c <= '9':
+			return 4
+		case c >= 'A' && c <= 'Z':
+			return 5
+		default: // lowercase, space, '.', ','
+			return 6
+		}
+	}
+	rare := contain[0]
+	for i := 1; i < len(contain); i++ {
+		if score(contain[i]) < score(rare) {
+			rare = contain[i]
+		}
+	}
+	return rare
 }
 
 // firstBytes derives, from the anchored prefix of a pattern, the set of bytes
@@ -157,8 +196,13 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 	if clp.first != "" && (message == "" || strings.IndexByte(clp.first, message[0]) < 0) {
 		return false
 	}
-	if clp.contain != "" && !strings.Contains(message, clp.contain) {
-		return false
+	if clp.contain != "" {
+		if clp.rare != 0 && strings.IndexByte(message, clp.rare) < 0 {
+			return false
+		}
+		if !strings.Contains(message, clp.contain) {
+			return false
+		}
 	}
 
 	match := clp.re.FindStringSubmatch(message)
