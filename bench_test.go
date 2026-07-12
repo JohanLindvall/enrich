@@ -59,3 +59,24 @@ func BenchmarkParseIntoReused(b *testing.B) {
 	}
 	sink = &r
 }
+
+var lineBytes = []byte(line)
+
+// What a []byte-holding caller (bufio.Scanner, a network buffer) had to write
+// before ParseBytes: string(b) copies the whole line.
+func BenchmarkParseStringConv(b *testing.B) {
+	var r Result
+	for n := 0; n < b.N; n++ {
+		ParseInto(string(lineBytes), &r)
+	}
+	sink = &r
+}
+
+// ParseBytes aliases the buffer instead, so the same work allocates nothing.
+func BenchmarkParseBytes(b *testing.B) {
+	var r Result
+	for n := 0; n < b.N; n++ {
+		ParseBytes(lineBytes, &r)
+	}
+	sink = &r
+}

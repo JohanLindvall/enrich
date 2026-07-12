@@ -71,7 +71,7 @@ func TestApplySubmatch_TimeWithoutLayouts(t *testing.T) {
 	// A parser with named time group but no layouts leaves the time untouched.
 	clp := &compiledLineParser{re: regexp.MustCompile(`x`)}
 	var r Result
-	clp.applySubmatch(&r, "time", "2026-07-06 12:00:00", "line")
+	clp.applySubmatch(&r, "time", "2026-07-06 12:00:00")
 	assert.True(t, r.Time.IsZero())
 }
 
@@ -97,23 +97,11 @@ func TestFirstBytes(t *testing.T) {
 	}
 }
 
-func TestWarnParseFailure_RateLimited(t *testing.T) {
-	clp := compiledLineParsers[0]
-	before := clp.lastWrn.Load()
-	clp.warnParseFailure("some line")
-	require.NotEqual(t, before, clp.lastWrn.Load(), "first call warns and stamps lastWrn")
-
-	stamped := clp.lastWrn.Load()
-	clp.warnParseFailure("another line")
-	assert.Equal(t, stamped, clp.lastWrn.Load(), "a second call within ten minutes is suppressed")
-}
-
 func TestApplySubmatch_BadTime(t *testing.T) {
-	// A time submatch that fails every layout leaves the time zero and logs
-	// the (rate-limited) warning.
+	// A time submatch that fails every layout leaves the time zero.
 	clp := &compiledLineParser{re: regexp.MustCompile(`x`), ts: []string{time.RFC3339Nano}}
 	var r Result
-	clp.applySubmatch(&r, "time", "garbage", "line")
+	clp.applySubmatch(&r, "time", "garbage")
 	assert.True(t, r.Time.IsZero())
 }
 

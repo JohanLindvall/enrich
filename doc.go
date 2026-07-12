@@ -30,12 +30,20 @@
 //
 // # Severity
 //
-// Severities are normalized to trace, debug, info, warn, error, and fatal
-// (see NormalizeSeverity and the level constants; the numeric levels follow
-// the OpenTelemetry SeverityNumber convention). HTTP response codes and
-// gRPC status codes map to severities when the line carries no explicit
-// level (see HTTPStatusSeverity). Syslog's notice severity normalizes to
-// info but keeps the finer-grained INFO2 severity number (Info2LevelNo).
+// Severities are normalized to trace, debug, info, warn, error, and fatal.
+// SeverityFromText maps any spelling in the wild to a canonical level and its
+// OpenTelemetry severity number; SeverityFromNumber is the inverse. HTTP
+// response codes and gRPC status codes map to severities when the line
+// carries no explicit level (see HTTPStatusSeverity and StatusKind). Syslog's
+// notice severity normalizes to info but keeps the finer-grained INFO2
+// severity number (Info2LevelNo).
+//
+// # Entry points
+//
+// Parse allocates a Result per line. ParseInto fills a caller-owned Result
+// instead, and ParseBytes does the same for a []byte, skipping the copy that
+// string(b) would make — a per-line pipeline should use one of those two, and
+// then parsing is allocation-free.
 //
 // # Memory
 //
@@ -46,5 +54,7 @@
 // string taken from it) is. Copy the fields you need if you hold many
 // results and want the large input strings collected sooner.
 //
-// The package holds no per-call state and is safe for concurrent use.
+// The package holds no mutable state and is safe for concurrent use. It never
+// logs: a line it cannot parse is reported through Result.Format (and a zero
+// Result.Time), not written to a logger.
 package enrich

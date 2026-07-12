@@ -1,8 +1,10 @@
 # CLAUDE.md — enrich
 
 Log-line metadata extraction: timestamp, normalized severity, trace/span IDs,
-structured-log fields, Azure resource metadata, exception details. Single
-public entry point `Parse(input string) *Result`.
+structured-log fields, Azure resource metadata, exception details. Entry
+points: `Parse(string) *Result` (allocates the Result), `ParseInto(string,
+*Result) bool` and `ParseBytes([]byte, *Result) bool` (caller-owned Result;
+allocation-free).
 
 ## Layout
 
@@ -51,6 +53,12 @@ public entry point `Parse(input string) *Result`.
 - **Severity numbers can be finer-grained than the text**: syslog notice is
   info with SeverityNumber Info2 (10). Parse's final normalization keeps a
   pre-set number, so don't reset SeverityNumber after applySubmatch.
+- **The package never logs.** A library writing to the global slog is
+  unconfigurable by its callers; an unparseable line is reported through
+  `Result.Format` and a zero `Result.Time` instead. Don't reintroduce it.
+- **`ParseInto` must fully reset the Result** (`*result = Result{Body: input}`)
+  — callers reuse one across lines, so any field left behind leaks into the
+  next line. Guarded by TestParseInto_ResetsResult.
 - **Test data is anonymized.** Log lines in tests use example.com/acme/base
   names, TEST-NET IPs (203.0.113.x), and all-zero dummy GUIDs. Keep it that
   way: never paste raw production log lines into tests — scrub domains,

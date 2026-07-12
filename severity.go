@@ -9,7 +9,7 @@ import (
 // The normalized severity levels and their numeric equivalents. The numbers
 // follow the OpenTelemetry log SeverityNumber convention, where each level
 // starts a range of four (trace=1, debug=5, info=9, warn=13, error=17,
-// fatal=21); SeverityText maps any number in a range back to its level.
+// fatal=21); SeverityFromNumber maps any number in a range back to its level.
 // Info2LevelNo is the second slot of the info range, used for syslog's
 // "notice" severity.
 const (
@@ -72,8 +72,11 @@ func init() {
 	add(FatalLevel, FatalLevelNo, "fatal", "f", "ftl", "crit", "critical", "panic", "pnc")
 }
 
-// NormalizeSeverity normalizes log severity to a set of predefined values
-func NormalizeSeverity(input string) (string, int) {
+// SeverityFromText normalizes any of the level spellings that appear in the
+// wild ("WRN", "Warning", "w", "Information", ...) to one of the canonical
+// levels and its OpenTelemetry severity number. It returns "", 0 for a string
+// that names no level. It is the inverse of SeverityFromNumber.
+func SeverityFromText(input string) (string, int) {
 	if input == "" {
 		return "", 0
 	}
@@ -98,8 +101,11 @@ func NormalizeSeverity(input string) (string, int) {
 	return "", 0
 }
 
-// SeverityText Gets the severity text for a given severity number
-func SeverityText(severity int) string {
+// SeverityFromNumber maps an OpenTelemetry severity number to its canonical
+// level, so any number within a level's range of four resolves to that level
+// (e.g. both 9 and the syslog-notice 10 are info). It returns "" for a number
+// outside 1-24. It is the inverse of SeverityFromText.
+func SeverityFromNumber(severity int) string {
 	if severity < 1 {
 		return ""
 	}
@@ -198,22 +204,39 @@ func getRedisSeverityText(severity string) string {
 	return ""
 }
 
-func parseHTTPResponseSeverity(value string, fail bool) string {
+func parseHTTPResponseSeverity(value string, kind StatusKind) string {
 	if code, err := strconv.ParseInt(value, 10, 64); err == nil && code >= 0 && code <= 599 {
-		return HTTPStatusSeverity(code, fail)
+		return HTTPStatusSeverity(code, kind)
 	}
 
 	return ""
 }
 
-// HTTPStatusSeverity parses severity from the HTTP response code.
-func HTTPStatusSeverity(code int64, fail bool) string {
+// StatusKind says how a line reports an HTTP status code, which decides how a
+// 4xx is graded: an access log merely observes the code (the client asked for
+// something that was not there — a warning), whereas a line whose subject is a
+// failed call reports it as the failure itself (an error).
+type StatusKind int
+
+const (
+	// StatusObserved is an access-log style status: 4xx grades to warn.
+	StatusObserved StatusKind = iota
+	// StatusFailure is a status reported as the failure of the operation the
+	// line is about: 4xx grades to error.
+	StatusFailure
+)
+
+// HTTPStatusSeverity grades an HTTP response code into a severity: 1xx-3xx is
+// info, 5xx (and a 0, meaning no response at all) is an error-ish warn, and
+// 4xx depends on kind (see StatusKind). It returns "" for a code outside
+// 0-599.
+func HTTPStatusSeverity(code int64, kind StatusKind) string {
 	if code >= 0 && code <= 599 {
 		if code == 0 {
 			return ErrorLevel
 		}
 
-		if fail && code >= 400 && code < 500 {
+		if kind == StatusFailure && code >= 400 && code < 500 {
 			return ErrorLevel
 		}
 
@@ -227,9 +250,9 @@ func HTTPStatusSeverity(code int64, fail bool) string {
 	return ""
 }
 
-func setHTTPResponseCode(result *Result, code int64, fail bool) {
-	if fail || result.Severity == "" || result.Severity == "info" {
-		if httpSev := HTTPStatusSeverity(code, fail); httpSev != "" {
+func setHTTPResponseCode(result *Result, code int64, kind StatusKind) {
+	if kind == StatusFailure || result.Severity == "" || result.Severity == "info" {
+		if httpSev := HTTPStatusSeverity(code, kind); httpSev != "" {
 			result.Severity = httpSev
 		}
 	}

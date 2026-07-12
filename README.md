@@ -48,24 +48,30 @@ debug unparsed lines.
 
 ## Severity
 
-Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`
-(`NormalizeSeverity`, with numeric equivalents following the OpenTelemetry
-`SeverityNumber` convention, and `SeverityText` mapping back). When a line
-carries no explicit level, HTTP response codes and gRPC status codes map to
-a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 4xx/5xx → warn (or error
-where the context indicates a failure). Syslog's notice severity keeps the
-finer-grained OTLP INFO2 number (`Info2LevelNo`) while normalizing to
-`info`.
+Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`.
+`SeverityFromText` maps any spelling in the wild ("WRN", "Warning", "w",
+"Information") to a canonical level plus its OpenTelemetry severity number;
+`SeverityFromNumber` is the inverse. When a line carries no explicit level,
+HTTP response codes and gRPC status codes map to a severity
+(`HTTPStatusSeverity`): 1xx–3xx → info, 5xx → warn, and 4xx depends on how the
+line reports it — `StatusObserved` (an access log, → warn) or `StatusFailure`
+(the code *is* the failure being reported, → error). Syslog's notice severity
+keeps the finer-grained OTLP INFO2 number (`Info2LevelNo`) while normalizing
+to `info`.
 
 ## Memory model
 
-The result shares memory with the input: `Result.Body` is the input string
-itself, and fields populated from a JSON line alias the input's backing array
-instead of copying. This keeps `Parse` fast (single-digit allocations per
-line) but keeps the input alive as long as the result is reachable — copy the
-fields you need if you hold many results.
+The result shares memory with the input: `Result.Body` is the input itself,
+and the extracted fields alias the input's backing array instead of copying.
+This is what makes parsing allocation-free, at the cost of two rules:
 
-The package holds no per-call state and is safe for concurrent use.
+- The input is kept alive as long as the result is reachable. Copy the fields
+  you need if you hold many results over large lines.
+- With `ParseBytes`, the input must not be modified while the result is in use
+  — see the `bufio.Scanner` note under Benchmarks.
+
+The package holds no mutable state, does not log, and is safe for concurrent
+use.
 
 ## Development
 
@@ -97,16 +103,22 @@ positional gates, and substring prefilters).
 
 Each of those figures includes one allocation: the 320-byte `Result`. The
 parsing itself allocates nothing — JSON and logfmt values alias the input
-rather than being copied — so `ParseInto` with a reused `Result` runs the
-whole pipeline **allocation-free** (~370 ns/line):
+rather than being copied — so reusing a `Result` runs the whole pipeline
+**allocation-free**. For a caller that already holds `[]byte` (a
+`bufio.Scanner`, a network buffer), `ParseBytes` also skips the line copy that
+`string(b)` would make — 391 ns and 0 B/line, against 614 ns and 768 B for
+`Parse(string(b))`:
 
 ```go
 var r enrich.Result
 for scanner.Scan() {
-    enrich.ParseInto(scanner.Text(), &r)
-    // ... consume r before the next iteration; its fields alias the line.
+    enrich.ParseBytes(scanner.Bytes(), &r)
+    emit(&r) // r's fields alias the scanner's buffer: consume before the next Scan
 }
 ```
+
+`ParseInto(scanner.Text(), &r)` is the safe alternative when the result must
+outlive the line — `Text` copies, so the fields do not dangle.
 
 ## Alternatives
 

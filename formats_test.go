@@ -183,7 +183,7 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("empty severity with number %d", result.SeverityNumber)
 			}
 		case TraceLevel, DebugLevel, InfoLevel, WarnLevel, ErrorLevel, FatalLevel:
-			if SeverityText(result.SeverityNumber) != result.Severity {
+			if SeverityFromNumber(result.SeverityNumber) != result.Severity {
 				t.Fatalf("severity %q has inconsistent number %d", result.Severity, result.SeverityNumber)
 			}
 		default:
@@ -231,4 +231,52 @@ func TestParse_TraceID_NotSubstringMatched(t *testing.T) {
 
 	enriched = Parse(`level=info trace_id=xxxx4bf92f3577b34da6a3ce929d0e0e4736xxxx`)
 	assert.Empty(t, enriched.TraceID)
+}
+
+func TestParseBytes(t *testing.T) {
+	var r Result
+	ok := ParseBytes([]byte(`{"@t":"2026-07-06T12:00:00Z","@l":"Warning","@m":"disk almost full"}`), &r)
+	assert.True(t, ok)
+	assert.Equal(t, FormatJSON, r.Format)
+	assert.Equal(t, "warn", r.Severity)
+	assert.Equal(t, "2026-07-06 12:00:00 +0000 UTC", r.Time.String())
+
+	// A line matching nothing reports false and leaves Format empty.
+	assert.False(t, ParseBytes([]byte(`nothing to see here`), &r))
+	assert.Equal(t, FormatNone, r.Format)
+}
+
+// ParseBytes must agree with Parse on every strategy, and Body must alias the
+// input rather than copy it.
+func TestParseBytes_MatchesParse(t *testing.T) {
+	for _, line := range []string{
+		`{"level":"error","ts":"2026-07-06T12:00:00Z","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}`,
+		`level=warn ts=2026-07-06T12:00:00Z msg="cache miss"`,
+		`2026/07/06 12:00:00 [error] upstream refused`,
+		`nothing matches this line`,
+	} {
+		want := Parse(line)
+		var got Result
+		ParseBytes([]byte(line), &got)
+		assert.Equal(t, want.Format, got.Format, "line %q", line)
+		assert.Equal(t, want.Severity, got.Severity, "line %q", line)
+		assert.Equal(t, want.Time, got.Time, "line %q", line)
+		assert.Equal(t, want.TraceID, got.TraceID, "line %q", line)
+		assert.Equal(t, line, got.Body, "line %q", line)
+	}
+}
+
+// ParseInto must fully reset the result, so a reused Result never leaks a
+// field from the previous line.
+func TestParseInto_ResetsResult(t *testing.T) {
+	var r Result
+	ParseInto(`{"@l":"Error","traceID":"4bf92f3577b34da6a3ce929d0e0e4736","@x":"System.Exception: boom"}`, &r)
+	assert.NotEmpty(t, r.TraceID)
+	assert.NotEmpty(t, r.ExceptionType)
+
+	ParseInto(`plain line with nothing in it`, &r)
+	assert.Empty(t, r.TraceID, "trace ID must not survive into the next line")
+	assert.Empty(t, r.ExceptionType, "exception must not survive into the next line")
+	assert.Empty(t, r.Severity)
+	assert.Equal(t, FormatNone, r.Format)
 }

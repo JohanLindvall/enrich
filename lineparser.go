@@ -1,12 +1,10 @@
 package enrich
 
 import (
-	"log/slog"
 	"regexp"
 	"regexp/syntax"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -26,7 +24,6 @@ type compiledLineParser struct {
 	re      *regexp.Regexp
 	names   []string // re.SubexpNames(), hoisted out of the per-line loop
 	ts      []string
-	lastWrn atomic.Int64 // unix nanos of the last parse-failure warning
 }
 
 // posGate is a fixed-position byte requirement derived from a pattern's
@@ -311,17 +308,6 @@ func firstBytes(re string) string {
 	return ""
 }
 
-// warnParseFailure logs a failed timestamp parse for this parser, rate-limited
-// to one warning per ten minutes. The stamp is a lock-free atomic so parsers
-// shared by concurrent pipelines never serialize on it.
-func (clp *compiledLineParser) warnParseFailure(msg string) {
-	now := time.Now().UnixNano()
-	last := clp.lastWrn.Load()
-	if now-last > (10*time.Minute).Nanoseconds() && clp.lastWrn.CompareAndSwap(last, now) {
-		slog.Warn("Failed to parse time", "regexp", clp.re.String(), "line", msg)
-	}
-}
-
 // apply matches the parser against message and, on a match, fills result from
 // the named submatches. It reports whether the parser matched.
 func (clp *compiledLineParser) apply(result *Result, message string) bool {
@@ -368,13 +354,13 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 		if start < 0 || start == end {
 			continue // group did not participate, or matched empty
 		}
-		clp.applySubmatch(result, name, message[start:end], message)
+		clp.applySubmatch(result, name, message[start:end])
 	}
 	return true
 }
 
 // applySubmatch fills the result field selected by the submatch name.
-func (clp *compiledLineParser) applySubmatch(result *Result, name, value, message string) {
+func (clp *compiledLineParser) applySubmatch(result *Result, name, value string) {
 	switch name {
 	case "level":
 		result.Severity = value
@@ -392,13 +378,14 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value, messag
 		case "stamptime":
 			value = expandStampTime(value, time.Now().UTC())
 		}
+		// A layout that does not parse simply leaves Time zero; the caller
+		// sees that (and Result.Format) rather than the package writing to a
+		// global logger.
 		if ts, ok := clp.parseLayoutTime(value); ok {
 			result.Time = ts
-		} else {
-			clp.warnParseFailure(message)
 		}
 	case "response_code":
-		if httpSev := parseHTTPResponseSeverity(value, false); httpSev != "" {
+		if httpSev := parseHTTPResponseSeverity(value, StatusObserved); httpSev != "" {
 			result.Severity = httpSev
 		}
 	case "sysloglevel":

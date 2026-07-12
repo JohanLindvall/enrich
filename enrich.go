@@ -75,7 +75,7 @@ type Result struct {
 	Time time.Time
 
 	// Severity is the normalized level (trace/debug/info/warn/error/fatal, see
-	// NormalizeSeverity) and SeverityNumber its numeric equivalent.
+	// SeverityFromText) and SeverityNumber its numeric equivalent.
 	Severity       string
 	SeverityNumber int
 
@@ -176,7 +176,7 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 			}
 		case "level":
 			if !levelGood {
-				if sev, _ := NormalizeSeverity(sval); sev != "" {
+				if sev, _ := SeverityFromText(sval); sev != "" {
 					level, levelGood = sval, true
 				} else if level == "" {
 					level = sval
@@ -224,6 +224,32 @@ func Parse(input string) *Result {
 	return result
 }
 
+// ParseBytes is ParseInto for a byte slice, avoiding the copy that
+// Parse(string(line)) makes of every line.
+//
+// It reports whether any parsing strategy matched.
+//
+// The result aliases input: Body and the extracted string fields point into
+// input's backing array rather than copying it. input must therefore not be
+// modified or reused while the result (or any string taken from it) is still
+// in use. This matters most with bufio.Scanner, whose Bytes method returns a
+// buffer that the next Scan overwrites — either consume the result before
+// scanning again:
+//
+//	var r enrich.Result
+//	for scanner.Scan() {
+//	    enrich.ParseBytes(scanner.Bytes(), &r)
+//	    emit(&r) // must not retain r's fields past this call
+//	}
+//
+// or, to retain anything, copy it out (or use ParseInto with
+// scanner.Text(), which copies the line for you).
+func ParseBytes(input []byte, result *Result) bool {
+	// input is treated as read-only for the lifetime of result, which is
+	// exactly the contract above; the string view therefore costs nothing.
+	return ParseInto(unsafe.String(unsafe.SliceData(input), len(input)), result)
+}
+
 // ParseInto is Parse without the per-call allocation: it resets *result and
 // fills it in place, for callers that process many lines and can reuse one
 // Result. It reports whether any parsing strategy matched (result.Format !=
@@ -254,7 +280,7 @@ func ParseInto(input string, result *Result) bool {
 
 	// Normalize the severity text; keep a finer-grained severity number (e.g.
 	// syslog notice -> INFO2) when the parser already set one.
-	sev, no := NormalizeSeverity(result.Severity)
+	sev, no := SeverityFromText(result.Severity)
 	result.Severity = sev
 	if result.SeverityNumber == 0 || sev == "" {
 		result.SeverityNumber = no
@@ -278,7 +304,7 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 	}
 
 	if code, ok := jsonInt(f.ResponseStatus.Code); ok {
-		setHTTPResponseCode(result, code, true)
+		setHTTPResponseCode(result, code, StatusFailure)
 	}
 
 	// Timestamp (RFC3339 string or numeric epoch) decoded by the lax time.Time
@@ -313,7 +339,7 @@ func (result *Result) applyProperties(p *enrichProperties) json.Number {
 		var hr httpResponse
 		if err := hr.UnmarshalJSON([]byte(p.Response)); err == nil {
 			if code, ok := jsonInt(hr.StatusCode); ok {
-				setHTTPResponseCode(result, code, true)
+				setHTTPResponseCode(result, code, StatusFailure)
 			}
 		}
 	case p.HTTPStatusCode != "":
@@ -358,13 +384,13 @@ func (result *Result) applySeverityHints(f *enrichFields) {
 	// Severity from a textual level/severity field; numeric levels (e.g. Pino's
 	// "level":30) are skipped by the lax tag, leaving the last textual value.
 	if result.Severity == "" && f.Severity != "" {
-		if s, _ := NormalizeSeverity(f.Severity); s != "" {
+		if s, _ := SeverityFromText(f.Severity); s != "" {
 			result.Severity = s
 		}
 	}
 
 	if result.Severity == "" && f.MongoSeverity != "" && !f.MongoTime.Date.IsZero() {
-		if s, _ := NormalizeSeverity(f.MongoSeverity); s != "" {
+		if s, _ := SeverityFromText(f.MongoSeverity); s != "" {
 			result.Severity = s
 		}
 	}
@@ -416,7 +442,7 @@ func (result *Result) applyMetadata(f *enrichFields) {
 func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Number) {
 	if f.ResultType == "HttpStatusCode" && f.ResultDescription != "" {
 		if code, err := strconv.ParseInt(f.ResultDescription, 10, 64); err == nil {
-			setHTTPResponseCode(result, code, false)
+			setHTTPResponseCode(result, code, StatusObserved)
 		}
 	}
 
@@ -434,7 +460,7 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Numbe
 			return
 		}
 	}
-	setHTTPResponseCode(result, code, false)
+	setHTTPResponseCode(result, code, StatusObserved)
 }
 
 // enrichFromPatterns fills the result from the first matching entry in the

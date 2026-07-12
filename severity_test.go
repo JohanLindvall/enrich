@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSeverityText(t *testing.T) {
+func TestSeverityFromNumber(t *testing.T) {
 	testCases := []struct {
 		in   int
 		want string
@@ -24,11 +24,11 @@ func TestSeverityText(t *testing.T) {
 		{25, ""},
 	}
 	for _, tc := range testCases {
-		assert.Equal(t, tc.want, SeverityText(tc.in), "severity %d", tc.in)
+		assert.Equal(t, tc.want, SeverityFromNumber(tc.in), "severity %d", tc.in)
 	}
 }
 
-func TestNormalizeSeverity(t *testing.T) {
+func TestSeverityFromText(t *testing.T) {
 	testCases := []struct {
 		in     string
 		want   string
@@ -72,7 +72,7 @@ func TestNormalizeSeverity(t *testing.T) {
 		{"panicking", "", 0},
 	}
 	for _, tc := range testCases {
-		got, gotNo := NormalizeSeverity(tc.in)
+		got, gotNo := SeverityFromText(tc.in)
 		assert.Equal(t, tc.want, got, "severity %q", tc.in)
 		assert.Equal(t, tc.wantNo, gotNo, "severity number %q", tc.in)
 	}
@@ -81,31 +81,31 @@ func TestNormalizeSeverity(t *testing.T) {
 func TestHTTPStatusSeverity(t *testing.T) {
 	testCases := []struct {
 		code int64
-		fail bool
+		kind StatusKind
 		want string
 	}{
-		{0, false, ErrorLevel},  // Envoy: no response at all
-		{100, false, InfoLevel}, // informational
-		{200, false, InfoLevel}, // success
-		{304, false, InfoLevel}, // redirect
-		{404, false, WarnLevel}, // client error, tolerant context
-		{404, true, ErrorLevel}, // client error, failing context
-		{500, false, WarnLevel}, // server error
-		{500, true, WarnLevel},  // fail only escalates 4xx
-		{50, false, WarnLevel},  // below 100 but valid range
-		{-1, false, ""},         // out of range
-		{600, false, ""},        // out of range
+		{0, StatusObserved, ErrorLevel},  // Envoy: no response at all
+		{100, StatusObserved, InfoLevel}, // informational
+		{200, StatusObserved, InfoLevel}, // success
+		{304, StatusObserved, InfoLevel}, // redirect
+		{404, StatusObserved, WarnLevel}, // client error, merely observed
+		{404, StatusFailure, ErrorLevel}, // client error, reported as the failure
+		{500, StatusObserved, WarnLevel}, // server error
+		{500, StatusFailure, WarnLevel},  // StatusFailure only escalates 4xx
+		{50, StatusObserved, WarnLevel},  // below 100 but valid range
+		{-1, StatusObserved, ""},         // out of range
+		{600, StatusObserved, ""},        // out of range
 	}
 	for _, tc := range testCases {
-		assert.Equal(t, tc.want, HTTPStatusSeverity(tc.code, tc.fail), "code %d fail %v", tc.code, tc.fail)
+		assert.Equal(t, tc.want, HTTPStatusSeverity(tc.code, tc.kind), "code %d kind %v", tc.code, tc.kind)
 	}
 }
 
 func TestParseHTTPResponseSeverity(t *testing.T) {
-	assert.Equal(t, InfoLevel, parseHTTPResponseSeverity("200", false))
-	assert.Equal(t, ErrorLevel, parseHTTPResponseSeverity("404", true))
-	assert.Equal(t, "", parseHTTPResponseSeverity("abc", false), "non-numeric")
-	assert.Equal(t, "", parseHTTPResponseSeverity("9999", false), "out of range")
+	assert.Equal(t, InfoLevel, parseHTTPResponseSeverity("200", StatusObserved))
+	assert.Equal(t, ErrorLevel, parseHTTPResponseSeverity("404", StatusFailure))
+	assert.Equal(t, "", parseHTTPResponseSeverity("abc", StatusObserved), "non-numeric")
+	assert.Equal(t, "", parseHTTPResponseSeverity("9999", StatusObserved), "out of range")
 }
 
 func TestSyslogSeverity(t *testing.T) {
@@ -187,14 +187,14 @@ func TestSeverityLUTMatchesRegexes(t *testing.T) {
 	}
 	for key := range severityLUT {
 		for _, v := range variants(key) {
-			gotText, gotNo := NormalizeSeverity(v)
+			gotText, gotNo := SeverityFromText(v)
 			wantText, wantNo := regexWalk(v)
 			assert.Equal(t, wantText, gotText, "severity %q", v)
 			assert.Equal(t, wantNo, gotNo, "severity %q", v)
 		}
 	}
 	for _, v := range []string{"trace2", "TRC1", "dbg3", "debug10", "informative", "warned", "eror", "x", "", "įnfo", "informationall"} {
-		gotText, gotNo := NormalizeSeverity(v)
+		gotText, gotNo := SeverityFromText(v)
 		wantText, wantNo := regexWalk(v)
 		assert.Equal(t, wantText, gotText, "severity %q", v)
 		assert.Equal(t, wantNo, gotNo, "severity %q", v)
