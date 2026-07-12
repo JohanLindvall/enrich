@@ -89,10 +89,24 @@ patch version on every green main build.
 go test -run='^$' -bench=. -benchmem .
 ```
 
-On a Ryzen 7 8840HS (amd64): ~940 ns and 3 allocations to enrich a ~900 B JSON
-Envoy access-log line; ~840 ns and 2 allocations for a ~1.9 kB logfmt line;
-~1.6 µs for a 1 kB line that matches nothing (the pattern table is skipped
-almost entirely via first-byte dispatch and substring prefilters).
+On a Ryzen 7 8840HS (amd64): ~480 ns to enrich a ~900 B JSON Envoy
+access-log line, ~760 ns for a ~1.9 kB logfmt line, ~865 ns for a plain-text
+line resolved by the pattern table, and ~320 ns for a 1 kB line that matches
+nothing (the table is skipped almost entirely via first-byte dispatch,
+positional gates, and substring prefilters).
+
+Each of those figures includes one allocation: the 320-byte `Result`. The
+parsing itself allocates nothing — JSON and logfmt values alias the input
+rather than being copied — so `ParseInto` with a reused `Result` runs the
+whole pipeline **allocation-free** (~370 ns/line):
+
+```go
+var r enrich.Result
+for scanner.Scan() {
+    enrich.ParseInto(scanner.Text(), &r)
+    // ... consume r before the next iteration; its fields alias the line.
+}
+```
 
 ## Alternatives
 

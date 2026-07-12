@@ -4,13 +4,20 @@ import (
 	"testing"
 )
 
+// sink keeps the parsed result alive so it escapes, as it does for a real
+// caller that forwards the Result. Without it the compiler proves the Result
+// never leaves the loop and stack-allocates it, hiding the 320 B/line that
+// production code actually pays. Use ParseInto with a reused Result to avoid
+// that allocation for real (see BenchmarkParseIntoReused).
+var sink *Result
+
 // A ~900 B Envoy-style JSON access-log line.
 var line = `{"@timestamp":"2026-03-14T09:26:53.394Z","grpc_status_number":0,"grpc_status":"OK","response_flags":"-","requested_server_name":"orders.api.example.net","upstream_local_address":"10.1.23.22:35290","upstream_service_time":"4","path":"/orders.v1.OrderService/GetOrders","bytes_received":43,"request_id":"aabbccdd11223344556677889900aabb","x_forwarded_for":"10.1.7.14","authority":"orders.api.example.net","bytes_sent":75,"upstream_host":"10.1.18.8:5000","user_agent":"grpc-go/1.60.0 (linux; amd64) orders-client/2026.3.1","downstream_remote_address":"10.1.7.14:41882","protocol":"HTTP/2","response_code":200,"downstream_local_address":"10.1.23.22:8443","method":"POST","upstream_cluster":"orders-service-blue_5000","duration":4}`
 
 // go test -bench=BenchmarkEnrich -benchmem -memprofile memprofile.out -cpuprofile profile.out -benchtime=30s
 func BenchmarkEnrich(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Parse(line)
+		sink = Parse(line)
 	}
 }
 
@@ -21,7 +28,7 @@ var faro = `timestamp="2026-03-14 06:11:46.397 +0000 UTC" kind=event event_name=
 // go tool pprof -http=:8080 profile.out
 func BenchmarkFaroEvent(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Parse(faro)
+		sink = Parse(faro)
 	}
 }
 
@@ -30,7 +37,7 @@ var missLine = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do ei
 
 func BenchmarkParseMiss(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Parse(missLine)
+		sink = Parse(missLine)
 	}
 }
 
@@ -40,6 +47,15 @@ var patternLine = `2026/07/11 10:00:00 error contacting upstream: connection ref
 
 func BenchmarkParsePattern(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		Parse(patternLine)
+		sink = Parse(patternLine)
 	}
+}
+
+// The hot-loop shape: one reused Result, no per-line allocation at all.
+func BenchmarkParseIntoReused(b *testing.B) {
+	var r Result
+	for n := 0; n < b.N; n++ {
+		ParseInto(line, &r)
+	}
+	sink = &r
 }

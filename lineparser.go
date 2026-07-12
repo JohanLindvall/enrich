@@ -24,6 +24,7 @@ type compiledLineParser struct {
 	quoted  bool   // pattern allows one leading '"', shifting the gates by one
 	gates   []posGate
 	re      *regexp.Regexp
+	names   []string // re.SubexpNames(), hoisted out of the per-line loop
 	ts      []string
 	lastWrn atomic.Int64 // unix nanos of the last parse-failure warning
 }
@@ -119,6 +120,7 @@ var compiledLineParsers []*compiledLineParser
 func init() {
 	for _, p := range lineParsers {
 		quoted, gates := posGates(p.re)
+		re := regexp.MustCompile(nonCapturing(p.re))
 		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
 			contain: p.contain,
 			first:   firstBytes(p.re),
@@ -126,10 +128,48 @@ func init() {
 			req:     requiredByte(p.re),
 			quoted:  quoted,
 			gates:   gates,
-			re:      regexp.MustCompile(p.re),
+			re:      re,
+			names:   re.SubexpNames(),
 			ts:      p.ts,
 		})
 	}
+}
+
+// nonCapturing rewrites every unnamed capturing group "(" into a
+// non-capturing "(?:". The table uses parentheses mostly for grouping and
+// alternation, and only named groups are ever read (via names/loc), so the
+// unnamed capture slots are pure overhead: each one widens the []int that
+// FindStringSubmatchIndex allocates and adds backtracking bookkeeping.
+// Escapes and character classes are skipped so "\(" and "[(]" stay literal.
+func nonCapturing(re string) string {
+	var b strings.Builder
+	b.Grow(len(re) + 16)
+	inClass := false
+	for i := 0; i < len(re); i++ {
+		c := re[i]
+		switch {
+		case c == '\\' && i+1 < len(re):
+			b.WriteByte(c)
+			i++
+			b.WriteByte(re[i])
+			continue
+		case inClass:
+			if c == ']' {
+				inClass = false
+			}
+		case c == '[':
+			inClass = true
+		case c == '(':
+			// "(?" already carries its own flags (?:, ?P<name>, ?s ...).
+			if i+1 < len(re) && re[i+1] == '?' {
+				break
+			}
+			b.WriteString("(?:")
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // posGates derives fixed-position byte requirements from a pattern's anchored
@@ -312,16 +352,23 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 		return false
 	}
 
-	match := clp.re.FindStringSubmatch(message)
-	if match == nil {
+	// The index form allocates one []int instead of a []string plus a string
+	// header per group; every captured value is a slice of message, so it
+	// aliases the input like the rest of the result.
+	loc := clp.re.FindStringSubmatchIndex(message)
+	if loc == nil {
 		return false
 	}
 
-	for i, name := range clp.re.SubexpNames() {
-		if match[i] == "" || name == "" {
+	for i, name := range clp.names {
+		if name == "" {
 			continue
 		}
-		clp.applySubmatch(result, name, match[i], message)
+		start, end := loc[2*i], loc[2*i+1]
+		if start < 0 || start == end {
+			continue // group did not participate, or matched empty
+		}
+		clp.applySubmatch(result, name, message[start:end], message)
 	}
 	return true
 }

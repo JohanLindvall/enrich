@@ -1,6 +1,9 @@
 package enrich
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // enrichFields lists the top-level JSON object keys that Parse inspects. The
 // lightning generator turns this into a fast, allocation-light UnmarshalJSON
@@ -12,10 +15,13 @@ import "time"
 // previous case-insensitive (EqualFold) key matching with an explicit set of
 // accepted spellings.
 //
-// Fields are concretely typed wherever the JSON type is stable. The *int64
-// fields are pointers so a present 0 (a real response/grpc code) is told apart
-// from an absent key; Protocol stays a plain string since a present protocol is
-// never empty. The "lax" tag option makes a value of an unexpected JSON type a
+// Fields are concretely typed wherever the JSON type is stable. Numeric codes
+// are json.Number rather than *int64: a pointer would make the generated
+// decoder heap-allocate the pointee once per line per field, whereas a nocopy
+// json.Number aliases the input. An empty json.Number means the key was absent,
+// which is what tells a real "response_code": 0 apart from no code at all (see
+// jsonInt). Protocol stays a plain string since a present protocol is never
+// empty. The "lax" tag option makes a value of an unexpected JSON type a
 // no-op (the field is left at its zero value and the rest of the object still
 // decodes), reproducing the type-tolerance of the old jsonparser.ObjectEach loop.
 //
@@ -60,10 +66,10 @@ type enrichFields struct {
 	MongoTime     mongoDate `json:"t,nocopy,lax"`
 	MongoSeverity string    `json:"s,nocopy,lax"`
 
-	ResponseCode     *int64 `json:"response_code|responseCode|statusCode|StatusCode,nocopy,lax"`
-	GrpcStatusNumber *int64 `json:"grpc_status_number,nocopy,lax"`
-	Protocol         string `json:"protocol,nocopy,lax"`
-	ResponseFlags    string `json:"response_flags,nocopy,lax"`
+	ResponseCode     json.Number `json:"response_code|responseCode|statusCode|StatusCode,nocopy,lax"`
+	GrpcStatusNumber json.Number `json:"grpc_status_number,nocopy,lax"`
+	Protocol         string      `json:"protocol,nocopy,lax"`
+	ResponseFlags    string      `json:"response_flags,nocopy,lax"`
 
 	Properties     enrichProperties     `json:"properties|Properties,nocopy,lax"`
 	ResponseStatus enrichResponseStatus `json:"responseStatus|ResponseStatus,nocopy,lax"`
@@ -74,14 +80,14 @@ type enrichFields struct {
 // httpResponse); HTTPStatusCode is a plain number. The whole field is lax, so a
 // non-object "properties" value is ignored.
 type enrichProperties struct {
-	Log            string `json:"log,nocopy,lax"`
-	Response       string `json:"response,nocopy,lax"`
-	HTTPStatusCode *int64 `json:"httpStatusCode,nocopy,lax"`
+	Log            string      `json:"log,nocopy,lax"`
+	Response       string      `json:"response,nocopy,lax"`
+	HTTPStatusCode json.Number `json:"httpStatusCode,nocopy,lax"`
 }
 
 // enrichResponseStatus is the "responseStatus" envelope carrying an HTTP code.
 type enrichResponseStatus struct {
-	Code *int64 `json:"code,nocopy,lax"`
+	Code json.Number `json:"code,nocopy,lax"`
 }
 
 // mongoDate is MongoDB's extended-JSON date envelope ({"$date": "..."}).
@@ -92,5 +98,5 @@ type mongoDate struct {
 // httpResponse decodes the small JSON document carried as a string in
 // properties.response.
 type httpResponse struct {
-	StatusCode *int64 `json:"statusCode,nocopy,lax"`
+	StatusCode json.Number `json:"statusCode,nocopy,lax"`
 }

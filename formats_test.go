@@ -191,3 +191,44 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+func TestValidTraceID(t *testing.T) {
+	for _, valid := range []string{
+		"4bf92f3577b34da6a3ce929d0e0e4736",     // 32 bare hex
+		"aebbb7bc-7ece-ee11-d090-84a20f1aa7b4", // Envoy request_id (UUID)
+		"4BF92F3577B34DA6A3CE929D0E0E4736",     // uppercase
+	} {
+		assert.True(t, validTraceID(valid), "should be valid: %q", valid)
+	}
+	for _, invalid := range []string{
+		"",
+		"4bf92f3577b34da6a3ce929d0e0e47",     // 30 hex: too short
+		"4bf92f3577b34da6a3ce929d0e0e4736ab", // 34 hex: too long
+		"zzz92f3577b34da6a3ce929d0e0e4736",   // non-hex
+		"trace 4bf92f3577b34da6a3ce929d0e0e4736 (cache)", // embedded in a sentence
+	} {
+		assert.False(t, validTraceID(invalid), "should be invalid: %q", invalid)
+	}
+}
+
+func TestValidSpanID(t *testing.T) {
+	assert.True(t, validSpanID("00f067aa0ba902b7"))
+	assert.True(t, validSpanID("00F067AA0BA902B7"))
+	assert.False(t, validSpanID(""))
+	assert.False(t, validSpanID("00f067aa0ba902"))        // too short
+	assert.False(t, validSpanID("00f067aa0ba902b7ab"))    // too long
+	assert.False(t, validSpanID("zzf067aa0ba902b7"))      // non-hex
+	assert.False(t, validSpanID("span 00f067aa0ba902b7")) // embedded
+}
+
+// Regression: the trace/span validators used to be unanchored regexes, so a
+// field merely containing 32 (or 16) hex digits validated, and the whole field
+// value — sentence and all — was then stored as the ID.
+func TestParse_TraceID_NotSubstringMatched(t *testing.T) {
+	enriched := Parse(`{"traceID":"trace was 4bf92f3577b34da6a3ce929d0e0e4736 (cached)","spanID":"span 00f067aa0ba902b7 end"}`)
+	assert.Empty(t, enriched.TraceID, "a sentence containing a trace ID is not a trace ID")
+	assert.Empty(t, enriched.SpanID, "a sentence containing a span ID is not a span ID")
+
+	enriched = Parse(`level=info trace_id=xxxx4bf92f3577b34da6a3ce929d0e0e4736xxxx`)
+	assert.Empty(t, enriched.TraceID)
+}

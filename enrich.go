@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -10,8 +11,45 @@ import (
 	"github.com/JohanLindvall/logfmt"
 )
 
-var traceIDRE = regexp.MustCompile(`(?i)[a-f0-9]{8}-?([a-f0-9]{4}-?){3}[a-f0-9]{12}`) // Relaxed to allow dashes from Envoy request ID
-var spanIDRE = regexp.MustCompile(`(?i)[a-f0-9]{16}`)
+// isHex reports whether c is an ASCII hex digit.
+func isHex(c byte) bool {
+	return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F')
+}
+
+// validTraceID reports whether s is a whole trace ID: 32 hex digits, dashes
+// permitted between them (Envoy emits its request_id as a UUID). The check is
+// anchored — a field that merely *contains* 32 hex digits somewhere in a
+// larger sentence is not a trace ID, and validating it as one used to store
+// the entire sentence in Result.TraceID.
+func validTraceID(s string) bool {
+	if len(s) < 32 || len(s) > 36 {
+		return false
+	}
+	hex := 0
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case isHex(c):
+			hex++
+		case c != '-':
+			return false
+		}
+	}
+	return hex == 32
+}
+
+// validSpanID reports whether s is a whole span ID: exactly 16 hex digits.
+func validSpanID(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isHex(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 var resourceGroupRE = regexp.MustCompile(`(?i)/subscriptions/[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}/resourcegroups/[^/]+`)
 var traceparentRE = regexp.MustCompile(`^traceparent[:=]\s*"?([0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2})`)
 
@@ -90,12 +128,16 @@ func removeDashesASCII(s string) string {
 // (version-traceid-spanid-flags, e.g. "00-4bf9...4736-00f0...02b7-01") into
 // its trace and span IDs, returning empty strings if the value is malformed.
 func parseTraceparent(v string) (traceID, spanID string) {
-	parts := strings.Split(v, "-")
-	if len(parts) != 4 || len(parts[1]) != 32 || len(parts[2]) != 16 ||
-		!traceIDRE.MatchString(parts[1]) || !spanIDRE.MatchString(parts[2]) {
+	// version(2)-traceid(32)-spanid(16)-flags(2), all hex: fixed offsets, so
+	// slice it directly instead of allocating a split.
+	if len(v) != 55 || v[2] != '-' || v[35] != '-' || v[52] != '-' {
 		return "", ""
 	}
-	return parts[1], parts[2]
+	traceID, spanID = v[3:35], v[36:52]
+	if !validTraceID(traceID) || !validSpanID(spanID) {
+		return "", ""
+	}
+	return traceID, spanID
 }
 
 // enrichFromLogFmt scans a logfmt line for a timestamp (key t/ts/time/
@@ -120,42 +162,46 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 	// message is immutable; alias its bytes rather than copying.
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
 	_ = logfmt.Iterate(buf, func(key, val []byte) bool {
+		// val aliases message (or, for a bare key, a constant): both are
+		// immutable, so a string view costs nothing and copies nothing.
+		// Anything kept in the result therefore aliases the input, exactly
+		// like the nocopy JSON fields.
+		sval := unsafe.String(unsafe.SliceData(val), len(val))
 		switch string(key) {
 		case "t", "ts", "time", "timestamp":
 			if !tsFound {
-				if t, ok := logfmt.ParseTime(string(val)); ok {
+				if t, ok := logfmt.ParseTime(sval); ok {
 					ts, tsFound = t, true
 				}
 			}
 		case "level":
 			if !levelGood {
-				s := string(val)
-				if sev, _ := NormalizeSeverity(s); sev != "" {
-					level, levelGood = s, true
+				if sev, _ := NormalizeSeverity(sval); sev != "" {
+					level, levelGood = sval, true
 				} else if level == "" {
-					level = s
+					level = sval
 				}
 			}
 		case "traceid", "traceID", "TraceId", "TraceID", "trace_id":
 			if traceID == "" {
-				traceID = string(val)
+				traceID = sval
 			}
 		case "spanid", "spanID", "SpanId", "SpanID", "span_id":
 			if spanID == "" {
-				spanID = string(val)
+				spanID = sval
 			}
 		case "traceparent":
-			if t, s := parseTraceparent(string(val)); t != "" {
+			if t, s := parseTraceparent(sval); t != "" {
 				traceID, spanID = t, s
 			}
 		}
 		return !levelGood || !tsFound || traceID == "" || spanID == ""
 	})
 
-	if traceID != "" && traceIDRE.MatchString(traceID) {
+	if validTraceID(traceID) {
 		result.TraceID = removeDashesASCII(traceID)
 	}
-	if spanID != "" && spanIDRE.MatchString(spanID) {
+	if validSpanID(spanID) {
 		result.SpanID = spanID
 	}
 	result.Time = ts
@@ -231,8 +277,8 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 		result.mergeNested(&nested)
 	}
 
-	if f.ResponseStatus.Code != nil {
-		setHTTPResponseCode(result, *f.ResponseStatus.Code, true)
+	if code, ok := jsonInt(f.ResponseStatus.Code); ok {
+		setHTTPResponseCode(result, code, true)
 	}
 
 	// Timestamp (RFC3339 string or numeric epoch) decoded by the lax time.Time
@@ -247,7 +293,7 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 	result.applySeverityHints(f)
 	result.applyMetadata(f)
 
-	if f.ResponseCode != nil {
+	if f.ResponseCode != "" {
 		responseCode = f.ResponseCode
 	}
 	result.applyResponseCode(f, responseCode)
@@ -257,7 +303,7 @@ func (result *Result) enrichFromJSON(f *enrichFields) {
 // nested log line (enriched recursively), a JSON-as-string HTTP response, or
 // a plain status code. The plain code is returned instead of applied so a
 // top-level response_code can take precedence.
-func (result *Result) applyProperties(p *enrichProperties) *int64 {
+func (result *Result) applyProperties(p *enrichProperties) json.Number {
 	switch {
 	case p.Log != "":
 		var nested Result
@@ -265,13 +311,27 @@ func (result *Result) applyProperties(p *enrichProperties) *int64 {
 		result.mergeNested(&nested)
 	case p.Response != "":
 		var hr httpResponse
-		if err := hr.UnmarshalJSON([]byte(p.Response)); err == nil && hr.StatusCode != nil {
-			setHTTPResponseCode(result, *hr.StatusCode, true)
+		if err := hr.UnmarshalJSON([]byte(p.Response)); err == nil {
+			if code, ok := jsonInt(hr.StatusCode); ok {
+				setHTTPResponseCode(result, code, true)
+			}
 		}
-	case p.HTTPStatusCode != nil:
+	case p.HTTPStatusCode != "":
 		return p.HTTPStatusCode
 	}
-	return nil
+	return ""
+}
+
+// jsonInt converts a decoded JSON number to an int64, reporting whether the
+// key was present and integral. An empty json.Number means the key was absent
+// (or held a non-numeric value that the lax decoder skipped), which is what
+// distinguishes an absent code from a present zero.
+func jsonInt(n json.Number) (int64, bool) {
+	if n == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(string(n), 10, 64)
+	return v, err == nil
 }
 
 // mergeNested lifts the fields extracted from an embedded log line (a Docker
@@ -309,9 +369,9 @@ func (result *Result) applySeverityHints(f *enrichFields) {
 		}
 	}
 
-	if f.GrpcStatusNumber != nil && *f.GrpcStatusNumber <= 16 {
+	if grpc, ok := jsonInt(f.GrpcStatusNumber); ok && grpc <= 16 {
 		if result.Severity == "" || result.Severity == "info" {
-			if *f.GrpcStatusNumber == 0 {
+			if grpc == 0 {
 				result.Severity = InfoLevel
 			} else {
 				result.Severity = WarnLevel
@@ -324,10 +384,10 @@ func (result *Result) applySeverityHints(f *enrichFields) {
 // trace/span IDs, Serilog context fields, Azure resource metadata, and the
 // exception payload.
 func (result *Result) applyMetadata(f *enrichFields) {
-	if f.TraceID != "" && traceIDRE.MatchString(f.TraceID) {
+	if validTraceID(f.TraceID) {
 		result.TraceID = removeDashesASCII(f.TraceID)
 	}
-	if f.SpanID != "" && spanIDRE.MatchString(f.SpanID) {
+	if validSpanID(f.SpanID) {
 		result.SpanID = f.SpanID
 	}
 	result.SourceContext = f.SourceContext
@@ -353,17 +413,18 @@ func (result *Result) applyMetadata(f *enrichFields) {
 // top-level response_code, or one deferred from properties.httpStatusCode).
 // A code of 0 is Envoy-specific: without a protocol the line is plain TCP
 // proxying (info); with response_flags DR/DC the client disconnected (warn).
-func (result *Result) applyResponseCode(f *enrichFields, responseCode *int64) {
+func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Number) {
 	if f.ResultType == "HttpStatusCode" && f.ResultDescription != "" {
 		if code, err := strconv.ParseInt(f.ResultDescription, 10, 64); err == nil {
 			setHTTPResponseCode(result, code, false)
 		}
 	}
 
-	if responseCode == nil {
+	code, ok := jsonInt(responseCode)
+	if !ok {
 		return
 	}
-	if *responseCode == 0 {
+	if code == 0 {
 		if f.Protocol == "" {
 			result.Severity = InfoLevel
 			return
@@ -373,7 +434,7 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode *int64) {
 			return
 		}
 	}
-	setHTTPResponseCode(result, *responseCode, false)
+	setHTTPResponseCode(result, code, false)
 }
 
 // enrichFromPatterns fills the result from the first matching entry in the

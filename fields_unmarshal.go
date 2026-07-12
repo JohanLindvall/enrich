@@ -3,6 +3,7 @@
 package enrich
 
 import (
+	json "encoding/json"
 	"github.com/JohanLindvall/lightning/pkg/unstable"
 	"time"
 )
@@ -184,23 +185,13 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(v *mongoDa
 	}
 }
 
-func decodePtrInt64NoCopyLaxValue(v **int64, data []byte, i int) (int, error) {
-	if data[i] == 'n' {
-		end, err := unstable.ExpectNull(data, i)
-		if err != nil {
-			return end, err
-		}
-		(*v) = nil
-		i = end
-	} else {
-		(*v) = new(int64)
-		n, end, err := unstable.ReadInt64OrNull(data, i)
-		if err != nil {
-			return end, err
-		}
-		(*(*v)) = n
-		i = end
+func decodeNumberNoCopyLaxValue(v *json.Number, data []byte, i int) (int, error) {
+	s, end, err := unstable.ReadNumberNoCopyOrNull(data, i)
+	if err != nil {
+		return end, err
 	}
+	(*v) = json.Number(s)
+	i = end
 	return i, nil
 }
 
@@ -291,8 +282,8 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(v *
 			}
 			i = end
 		case "httpStatusCode":
-			var lax *int64
-			end, err := decodePtrInt64NoCopyLaxValue(&lax, data, i)
+			var lax json.Number
+			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -392,8 +383,8 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichResponseStatus
 		}
 		switch key {
 		case "code":
-			var lax *int64
-			end, err := decodePtrInt64NoCopyLaxValue(&lax, data, i)
+			var lax json.Number
+			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -709,8 +700,8 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			}
 			i = end
 		case "response_code", "responseCode", "statusCode", "StatusCode":
-			var lax *int64
-			end, err := decodePtrInt64NoCopyLaxValue(&lax, data, i)
+			var lax json.Number
+			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -721,8 +712,8 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			}
 			i = end
 		case "grpc_status_number":
-			var lax *int64
-			end, err := decodePtrInt64NoCopyLaxValue(&lax, data, i)
+			var lax json.Number
+			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -870,8 +861,8 @@ func lightningGithubComJohanLindvallEnrichhttpResponsedecodehttpResponse(v *http
 		}
 		switch key {
 		case "statusCode":
-			var lax *int64
-			end, err := decodePtrInt64NoCopyLaxValue(&lax, data, i)
+			var lax json.Number
+			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {

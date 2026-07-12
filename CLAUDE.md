@@ -78,11 +78,31 @@ lightning's `nocopy`/`lax` tag options as unknown. Don't widen the exclusion.
 ## Performance
 
 `Parse` is on a hot path (one call per log line). Current numbers
-(Ryzen 7 8840HS, amd64): ~940 ns / 3 allocs for a ~900 B JSON line, ~840 ns /
-2 allocs for a ~1.9 kB logfmt line, ~1.6 µs / 1 alloc for a 1 kB line that
-matches nothing (BenchmarkParseMiss). The allocation budget comes from the
-nocopy JSON decode and logfmt's zero-alloc iteration — keep new fields
-`nocopy,lax` and avoid per-line allocations in new code paths. The pattern
-table is ordered roughly most-common-first; every entry needs either a
-`firstBytes` classifier match or a `contain` substring pre-filter (see the
-lineparser.go note above) — the miss path regressed 9x without them.
+(Ryzen 7 8840HS, amd64), with the result escaping as it does for a real
+caller: ~480 ns / 1 alloc for a ~900 B JSON line, ~760 ns / 1 alloc for a
+~1.9 kB logfmt line, ~865 ns / 2 allocs for a pattern-table line, ~320 ns /
+1 alloc for a 1 kB line that matches nothing. **That single alloc is the
+320 B `Result` itself** — `ParseInto` with a reused `Result` is fully
+zero-allocation (~370 ns), and is what a per-line pipeline should call.
+
+The parsing work itself allocates nothing on the JSON and logfmt paths:
+
+- **Never add a `*int64` (or other pointer) field to `enrichFields`.** The
+  generated decoder heap-allocates the pointee, once per line per field. Use
+  `json.Number` with `nocopy` instead: it aliases the input, and an empty
+  value means the key was absent — which is the only reason the pointers
+  existed. See `jsonInt`.
+- **Never `string(val)` inside the logfmt callback.** The bytes alias the
+  input and the input is immutable, so `unsafe.String` is free; a conversion
+  copies the value on every line.
+- The pattern path's one remaining alloc is the `[]int` that
+  `FindStringSubmatchIndex` returns; its size scales with the capture-group
+  count, which is why `nonCapturing` rewrites every unnamed group to `(?:`.
+  Keep new table entries free of unnamed capturing groups.
+- Trace/span IDs are validated by hand (`validTraceID`/`validSpanID`), not by
+  regex — the old regexes cost ~40% of the JSON path on a line carrying a
+  request_id.
+
+The pattern table is ordered roughly most-common-first; every entry needs
+either a `firstBytes` classifier match or a `contain` substring pre-filter
+(see the lineparser.go note above) — the miss path regressed 9x without them.
