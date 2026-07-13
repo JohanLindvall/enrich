@@ -21,9 +21,12 @@ allocation-free).
 - `lineparser.go` — the regex pattern table for plain-text formats (nginx,
   Apache, klog, redis, syslog, Lambda, Spring Boot, tracebacks, ...) plus
   timestamp-layout parsing. `firstBytes` derives a first-byte prefilter from
-  each pattern's anchored prefix — a new anchored shape needs a classifier
-  case or it silently loses the cheap skip (the miss path is ~9x slower
-  without it). Unanchored entries must carry a `contain` prefilter.
+  each pattern's anchored prefix, and `init` inverts those into
+  `parsersByFirstByte[256]` — a line's first byte indexes straight to the
+  parsers it can start (a lorem-ipsum miss tries 6 of 32), so **a new anchored
+  shape needs a `firstBytes` case or it silently loses the skip**. Unanchored
+  entries have no gate and land in every bucket, so they must carry a
+  `contain` prefilter.
 - `severity.go` — severity normalization, numeric levels, HTTP/gRPC/syslog/
   redis code-to-severity mapping. `severityLUT` **is** the normalizer, not a
   cache in front of one: the set of level spellings is finite, so every input

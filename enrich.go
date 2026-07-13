@@ -259,19 +259,11 @@ func ParseInto(input string, result *Result) bool {
 	*result = Result{Body: input}
 	message := removeANSICodes(input)
 
-	// The decoder only reads messageBytes (nocopy fields alias it), so alias the
-	// immutable string instead of copying it.
-	messageBytes := unsafe.Slice(unsafe.StringData(message), len(message))
-
-	var f enrichFields
-	if err := f.UnmarshalJSON(messageBytes); err == nil {
+	// Only a line that opens an object can decode; checking that here keeps the
+	// 400-byte enrichFields off the stack (and out of the zeroing) for every
+	// line that is not JSON, which is most of them.
+	if looksLikeJSONObject(message) && result.enrichFromJSON(message) {
 		result.Format = FormatJSON
-		result.enrichFromJSON(&f)
-		if result.Severity == "" {
-			// Pino/Bunyan encode the level as a number, which the lax
-			// string decoder skips; map it from the raw line.
-			result.Severity = pinoSeverity(message)
-		}
 	} else if result.enrichFromLogFmt(message) {
 		result.Format = FormatLogfmt
 	} else if result.enrichFromPatterns(message) {
@@ -289,8 +281,45 @@ func ParseInto(input string, result *Result) bool {
 	return result.Format != FormatNone
 }
 
-// enrichFromJSON fills the result from a successfully decoded JSON log line.
-func (result *Result) enrichFromJSON(f *enrichFields) {
+// looksLikeJSONObject reports whether message can possibly decode as a JSON
+// object: the decoder skips leading whitespace and then requires '{'.
+func looksLikeJSONObject(message string) bool {
+	for i := 0; i < len(message); i++ {
+		switch message[i] {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// enrichFromJSON decodes message as a JSON log line and fills the result from
+// it, reporting whether it decoded. enrichFields is declared here rather than
+// in ParseInto so that only the JSON path pays to zero it.
+func (result *Result) enrichFromJSON(message string) bool {
+	// The decoder only reads these bytes (nocopy fields alias them), so alias
+	// the immutable string instead of copying it.
+	messageBytes := unsafe.Slice(unsafe.StringData(message), len(message))
+
+	var f enrichFields
+	if err := f.UnmarshalJSON(messageBytes); err != nil {
+		return false
+	}
+	result.applyJSON(&f)
+	if result.Severity == "" {
+		// Pino/Bunyan encode the level as a number, which the lax string
+		// decoder skips; map it from the raw line.
+		result.Severity = pinoSeverity(message)
+	}
+	return true
+}
+
+// applyJSON fills the result from a successfully decoded JSON log line.
+func (result *Result) applyJSON(f *enrichFields) {
 	// Nested objects first, so authoritative top-level scalars (notably the
 	// Azure diagnostic-log "time") win over values lifted from properties.log.
 	responseCode := result.applyProperties(&f.Properties)
@@ -469,10 +498,14 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Numbe
 // is extracted independently of the table.
 func (result *Result) enrichFromPatterns(message string) bool {
 	matched := false
-	for _, clp := range compiledLineParsers {
-		if clp.apply(result, message) {
-			matched = true
-			break
+	if message != "" {
+		// One index picks the parsers this line's first byte can start, in
+		// table (priority) order; the rest never run.
+		for _, clp := range parsersByFirstByte[message[0]] {
+			if clp.apply(result, message) {
+				matched = true
+				break
+			}
 		}
 	}
 

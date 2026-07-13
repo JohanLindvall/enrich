@@ -114,6 +114,14 @@ var lineParsers = []lineParser{
 
 var compiledLineParsers []*compiledLineParser
 
+// parsersByFirstByte buckets the table by the line's first byte. Testing each
+// parser's `first` set per line meant 32 IndexByte calls just to decide what
+// *not* to run — 11% of Parse's time. The bucket for a byte holds, in table
+// order, exactly the parsers that byte can start (a parser with no first-byte
+// gate, e.g. an unanchored one, appears in every bucket), so dispatch is one
+// index and the priority order is preserved.
+var parsersByFirstByte [256][]*compiledLineParser
+
 func init() {
 	for _, p := range lineParsers {
 		quoted, gates := posGates(p.re)
@@ -129,6 +137,13 @@ func init() {
 			names:   re.SubexpNames(),
 			ts:      p.ts,
 		})
+	}
+	for b := 0; b < 256; b++ {
+		for _, clp := range compiledLineParsers {
+			if clp.first == "" || strings.IndexByte(clp.first, byte(b)) >= 0 {
+				parsersByFirstByte[b] = append(parsersByFirstByte[b], clp)
+			}
+		}
 	}
 }
 
@@ -311,9 +326,6 @@ func firstBytes(re string) string {
 // apply matches the parser against message and, on a match, fills result from
 // the named submatches. It reports whether the parser matched.
 func (clp *compiledLineParser) apply(result *Result, message string) bool {
-	if clp.first != "" && (message == "" || strings.IndexByte(clp.first, message[0]) < 0) {
-		return false
-	}
 	if len(clp.gates) > 0 {
 		off := 0
 		if clp.quoted && len(message) > 0 && message[0] == '"' {
