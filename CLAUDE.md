@@ -130,3 +130,32 @@ The parsing work itself allocates nothing on the JSON and logfmt paths:
 The pattern table is ordered roughly most-common-first; every entry needs
 either a `firstBytes` classifier match or a `contain` substring pre-filter
 (see the lineparser.go note above) — the miss path regressed 9x without them.
+
+Parse's own overhead is now small: profiling the JSON and logfmt paths shows
+the time going to `logfmt.Iterate` (~41%) and the generated lightning decoder
+(~33%), both of which are already SIMD-optimized. Gating works — only **1-2
+regexes actually execute** per line, and a miss executes none.
+
+## Rejected optimizations (measured; do not re-attempt without new evidence)
+
+- **Hand-rolled numeric timestamp parser** to replace `time.Parse` (which
+  re-tokenizes its layout on every call — `time.nextStdChunk` is ~5%). Worth
+  ~11% of the pattern path, but a differential test against `time.Parse`
+  immediately showed the hand-rolled version accepting shapes the layouts
+  reject (`2026/07/06T12:00:00`, slash dates with zone offsets, 6-digit
+  fractions against a `.000` layout). Nothing captures those shapes *today*,
+  so it passed the suite — which is exactly the danger: correctness would
+  silently depend on the pattern table never gaining such an entry. If this is
+  ever revisited, write one parser **per layout family** and differential-test
+  each against its own layouts, rather than one generic parser.
+- **Early-exit for `enrichFromLogFmt`.** It scans every line to the end because
+  it cannot know that no `trace_id` is coming, and almost no line carries one.
+  Pre-scanning with `strings.Contains` for "level="/"race"/"pan" to prove
+  absence and stop early made the 1.9 kB logfmt benchmark **39% slower**: the
+  three needles cost ~810 ns, against ~1016 ns for the whole parse. Needles
+  starting with a common letter are ruinous here — Go's `Index` restarts
+  `IndexByte` at every candidate, and 'l'/'r'/'p' are everywhere in log text
+  (one *rare*-byte `IndexByte` over the same line costs 24 ns). There is no
+  rare byte common to the trace-key spellings to gate on, so proving absence
+  costs as much as parsing. The full scan is already the cheapest correct
+  option.
