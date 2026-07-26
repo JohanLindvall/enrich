@@ -1,14 +1,15 @@
 # enrich
 
-Extracts metadata from log lines in Go: timestamp, normalized severity,
-trace/span IDs, structured-log fields, Azure resource metadata, and
-.NET-style exception details — from JSON, logfmt, and a wide range of
-plain-text formats.
+Extracts metadata from log lines in Go: timestamp, normalized severity, the
+message, trace/span IDs, HTTP status code, structured-log fields, Azure
+resource metadata, and exception details — from JSON, logfmt, and a wide range
+of plain-text formats.
 
 ```go
 e := enrich.Parse(`{"@t":"2021-09-01T12:00:00Z","@l":"Information","@m":"Hello, World!"}`)
 fmt.Println(e.Time)     // 2021-09-01 12:00:00 +0000 UTC
 fmt.Println(e.Severity) // info
+fmt.Println(e.Message)  // Hello, World!
 fmt.Println(e.Format)   // json
 ```
 
@@ -25,17 +26,21 @@ go get github.com/JohanLindvall/enrich
 1. **JSON** — decoded with a generated, allocation-light decoder
    ([lightning](https://github.com/JohanLindvall/lightning)) that accepts the
    common key spellings per logical field: `@t`/`@timestamp`/`timestamp`/`ts`/`time`
-   for the timestamp; Serilog's `@l`, `@m`, `@mt`, `@x`, `@i`, `@sn`, `@sv`, `@sp`;
-   `traceid`/`traceID`/`TraceId`/`trace_id`/`request_id`; Envoy's `response_code`
-   and `response_flags`; Azure diagnostic-log envelopes, including nested
+   for the timestamp; `@m`/`message`/`msg` for the message; Serilog's `@l`,
+   `@mt`, `@x`, `@i`, `@sn`, `@sv`, `@sp`; every capitalization of
+   `traceId`/`spanId` plus `trace_id`/`span_id`, `traceparent` and Envoy's
+   `request_id`; Elastic Common Schema's dotted keys (`log.level`, `trace.id`,
+   `service.name`, `error.type`/`error.message`/`error.stack_trace`);
+   OTLP-JSON's `severityNumber`/`severityText`; Envoy's `response_code` and
+   `response_flags`; Azure diagnostic-log envelopes, including nested
    `properties.log` payloads that are themselves enriched recursively; Docker
    json-file records (the embedded `log` line is enriched recursively);
    MongoDB structured logs (`{"t":{"$date":…},"s":"I"}`); and Pino/Bunyan
    numeric levels (`"level":30`).
 2. **logfmt** — a key/value scan
    ([logfmt](https://github.com/JohanLindvall/logfmt)) picks up
-   `t`/`ts`/`time`/`timestamp`, `level`, and trace correlation IDs
-   (`trace_id`/`span_id` spellings and W3C `traceparent`).
+   `t`/`ts`/`time`/`timestamp`, `level`, `msg`/`message`, and trace
+   correlation IDs (`trace_id`/`span_id` spellings and W3C `traceparent`).
 3. **Pattern table** — regular expressions covering common plain-text formats:
    nginx and Apache access/error logs, klog, redis, syslog (RFC3164, RFC5424,
    and librdkafka's `<N>|` prefix), AWS Lambda, Spring Boot, Python logging,
@@ -46,20 +51,48 @@ go get github.com/JohanLindvall/enrich
 or empty for none), so callers can export enrichment hit-rate metrics and
 debug unparsed lines.
 
+## What it extracts
+
+| Field | |
+|---|---|
+| `Body`, `Format` | the input line, and the strategy that parsed it |
+| `Time` | always UTC; a timestamp with no offset is read as UTC, and a format with no year (klog, syslog RFC3164) infers it from the clock |
+| `Severity`, `SeverityNumber` | normalized level and its OTLP severity number |
+| `Message` | the message without its envelope (JSON/logfmt only — a plain-text line's message is not separable from `Body`) |
+| `HTTPStatusCode` | the status code the line reports, 0 if none |
+| `TraceID`, `SpanID` | whole identifiers only — see below |
+| `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context |
+| `ResourceID`, `ResourceGroup`, `EventCategory` | Azure resource metadata |
+| `ExceptionType`, `ExceptionMessage`, `ExceptionStackTrace` | from a Serilog `@x` payload, the ECS/OTel `error.*` keys, or a .NET unhandled-exception line |
+
+A trace ID is only taken from a value that *is* one — 32 hex digits (16 for a
+span), dashes permitted in a trace ID so an Envoy `request_id` UUID is
+accepted and de-dashed. A field that merely contains an ID inside a sentence
+is not one, and neither is the all-zero ID that W3C trace-context defines as
+invalid and that OpenTelemetry SDKs emit for a record with no active span.
+
 ## Severity
 
 Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`.
 `SeverityFromText` maps any spelling in the wild ("WRN", "Warning", "w",
-"Information") to a canonical level plus its OpenTelemetry severity number;
-`SeverityFromNumber` is the inverse (the numbers give each level a range of
-four, so `Info2LevelNo` is an info that outranks a plain one — which is how
-syslog's *notice* is represented). When a line carries no explicit level,
-HTTP response codes and gRPC status codes map to a severity
-(`HTTPStatusSeverity`): 1xx–3xx → info, 5xx → warn, and 4xx depends on how the
-line reports it — `StatusObserved` (an access log, → warn) or `StatusFailure`
-(the code *is* the failure being reported, → error). Syslog's notice severity
-keeps the finer-grained OTLP INFO2 number (`Info2LevelNo`) while normalizing
-to `info`.
+"Information", Serilog's "VRB", syslog's "notice"/"alert"/"emerg",
+java.util.logging's "SEVERE"/"FINE"/"FINEST") to a canonical level plus its
+OpenTelemetry severity number; `SeverityFromNumber` is the inverse.
+
+The numbers give each level a range of four, which is where the grading the
+six names flatten away is kept: syslog's *notice* is an info with
+`Info2LevelNo`, its *alert* and *emergency* are fatals with `Fatal2LevelNo`
+and `Fatal3LevelNo`, and an OTLP-JSON record's own `severityNumber` is taken
+as given. `Severity` and `SeverityNumber` never contradict each other, whatever
+order the signals in a line arrive in.
+
+When a line carries no explicit level, HTTP response codes and gRPC status
+codes map to a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 5xx → warn,
+and 4xx depends on how the line reports it — `StatusObserved` (an access log,
+→ warn) or `StatusFailure` (the code *is* the failure being reported, →
+error). The code itself is kept in `HTTPStatusCode` either way. A JSON line
+carrying an exception payload but no level is an error, like a Go panic or a
+Python traceback.
 
 ## Memory model
 
@@ -97,18 +130,19 @@ patch version on every green main build.
 go test -run='^$' -bench=. -benchmem .
 ```
 
-On a Ryzen 7 8840HS (amd64): ~480 ns to enrich a ~900 B JSON Envoy
-access-log line, ~760 ns for a ~1.9 kB logfmt line, ~865 ns for a plain-text
-line resolved by the pattern table, and ~320 ns for a 1 kB line that matches
-nothing (the table is skipped almost entirely via first-byte dispatch,
+On a Ryzen 7 8840HS (amd64): ~490 ns to enrich a ~900 B JSON Envoy
+access-log line, ~750 ns for a ~1.9 kB logfmt line, ~700 ns for a plain-text
+line resolved by the pattern table, ~900 ns for an Azure diagnostic record
+with a nested `properties.log` payload, and ~226 ns for a 1 kB line that
+matches nothing (the table is skipped almost entirely via first-byte dispatch,
 positional gates, and substring prefilters).
 
-Each of those figures includes one allocation: the 320-byte `Result`. The
+Each of those figures includes one allocation: the 352-byte `Result`. The
 parsing itself allocates nothing — JSON and logfmt values alias the input
 rather than being copied — so reusing a `Result` runs the whole pipeline
 **allocation-free**. For a caller that already holds `[]byte` (a
 `bufio.Scanner`, a network buffer), `ParseBytes` also skips the line copy that
-`string(b)` would make — 391 ns and 0 B/line, against 614 ns and 768 B for
+`string(b)` would make — 352 ns and 0 B/line, against 586 ns and 768 B for
 `Parse(string(b))`:
 
 ```go

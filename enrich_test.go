@@ -1,6 +1,8 @@
 package enrich
 
 import (
+	"math/rand"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -536,4 +538,299 @@ func TestParse_EmptyInput(t *testing.T) {
 	assert.Equal(t, "", enriched.Body)
 	assert.Equal(t, FormatNone, enriched.Format)
 	assert.Empty(t, enriched.Severity)
+}
+
+// ---------------------------------------------------------------------------
+// Message, status code, and the identifier spellings
+// ---------------------------------------------------------------------------
+
+func TestParse_JSON_Message(t *testing.T) {
+	for _, key := range []string{"@m", "message", "Message", "MESSAGE", "msg"} {
+		enriched := Parse(`{"` + key + `":"disk almost full","level":"warn"}`)
+		assert.Equal(t, "disk almost full", enriched.Message, "key %s", key)
+	}
+
+	// The template and the rendered message are different fields, and both are
+	// kept.
+	enriched := Parse(`{"@mt":"Order {Id} rejected","@m":"Order 42 rejected"}`)
+	assert.Equal(t, "Order {Id} rejected", enriched.Template)
+	assert.Equal(t, "Order 42 rejected", enriched.Message)
+
+	// A plain-text line has no separable message.
+	assert.Empty(t, Parse(`2026-03-14 09:26:53 starting watch loop`).Message)
+}
+
+func TestParse_Logfmt_Message(t *testing.T) {
+	assert.Equal(t, "cache warmed", Parse(`ts=2026-03-14T09:26:53Z level=info msg="cache warmed"`).Message)
+	assert.Equal(t, "cache warmed", Parse(`level=info message="cache warmed"`).Message)
+
+	// A key=value line the pattern table resolves instead still yields its
+	// message: the logfmt scan ran, it just did not claim the line.
+	enriched := Parse(`name=web-0 kind=Pod reason=Unhealthy type=Warning msg="Liveness probe failed"`)
+	assert.Equal(t, FormatPattern, enriched.Format)
+	assert.Equal(t, "Liveness probe failed", enriched.Message)
+}
+
+func TestParse_TraceIDSpellings(t *testing.T) {
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	const spanID = "00f067aa0ba902b7"
+	for _, keys := range [][2]string{
+		{"traceId", "spanId"}, // Micrometer/Sleuth, OpenTelemetry JS
+		{"traceID", "spanID"},
+		{"TraceId", "SpanId"}, // .NET
+		{"trace_id", "span_id"},
+		{"trace.id", "span.id"}, // Elastic Common Schema
+	} {
+		enriched := Parse(`{"` + keys[0] + `":"` + traceID + `","` + keys[1] + `":"` + spanID + `"}`)
+		assert.Equal(t, traceID, enriched.TraceID, "key %s", keys[0])
+		assert.Equal(t, spanID, enriched.SpanID, "key %s", keys[1])
+
+		enriched = Parse(`level=info ` + keys[0] + `=` + traceID + ` ` + keys[1] + `=` + spanID)
+		assert.Equal(t, traceID, enriched.TraceID, "logfmt key %s", keys[0])
+		assert.Equal(t, spanID, enriched.SpanID, "logfmt key %s", keys[1])
+	}
+}
+
+// An all-zero ID is W3C trace-context's "invalid" value, which OpenTelemetry
+// SDKs emit for a record with no active span. Keeping it would file every
+// untraced line in a fleet under one trace.
+func TestParse_ZeroTraceIDRejected(t *testing.T) {
+	assert.False(t, validTraceID("00000000000000000000000000000000"))
+	assert.False(t, validTraceID("00000000-0000-0000-0000-000000000000"))
+	assert.False(t, validSpanID("0000000000000000"))
+	assert.True(t, validTraceID("00000000000000000000000000000001"))
+	assert.True(t, validSpanID("0000000000000001"))
+
+	enriched := Parse(`{"TraceId":"00000000000000000000000000000000","SpanId":"0000000000000000","@l":"Information"}`)
+	assert.Empty(t, enriched.TraceID)
+	assert.Empty(t, enriched.SpanID)
+
+	traceID, spanID := parseTraceparent("00-00000000000000000000000000000000-0000000000000000-00")
+	assert.Empty(t, traceID)
+	assert.Empty(t, spanID)
+}
+
+func TestParse_HTTPStatusCode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		line  string
+		code  int
+		level string
+	}{
+		{"envoy", `{"response_code":503,"protocol":"HTTP/2"}`, 503, "warn"},
+		{"snake case", `{"status_code":404}`, 404, "warn"},
+		{"ecs", `{"http.response.status_code":201}`, 201, "info"},
+		{"azure response", `{"properties":{"response":"{\"statusCode\":403}"}}`, 403, "error"},
+		{"azure plain", `{"properties":{"httpStatusCode":418}}`, 418, "warn"},
+		{"azure result type", `{"resultType":"HttpStatusCode","resultDescription":"429"}`, 429, "warn"},
+		{"response status", `{"responseStatus":{"code":400}}`, 400, "error"},
+		{
+			"nginx access log",
+			`198.51.100.4 - - [14/Mar/2026:06:43:18 +0000] "GET /healthz HTTP/1.1" 404 13 "" "probe/2.7"`,
+			404, "warn",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enriched := Parse(tc.line)
+			assert.Equal(t, tc.code, enriched.HTTPStatusCode)
+			assert.Equal(t, tc.level, enriched.Severity)
+		})
+	}
+
+	// A code that is not an HTTP status is not recorded as one: Envoy writes 0
+	// when there was no response at all.
+	assert.Zero(t, Parse(`{"response_code":0,"protocol":"HTTP/1.1","response_flags":"UF"}`).HTTPStatusCode)
+	// An explicit level still wins over the code, which is kept regardless.
+	enriched := Parse(`{"level":"debug","response_code":500}`)
+	assert.Equal(t, "debug", enriched.Severity)
+	assert.Equal(t, 500, enriched.HTTPStatusCode)
+}
+
+func TestParse_JSON_OTelSeverityNumber(t *testing.T) {
+	// The number names the level on its own, at its own granularity: 10 is a
+	// notice, an info that outranks a plain one.
+	enriched := Parse(`{"severityNumber":10,"severityText":"NOTICE","body":"listening"}`)
+	assert.Equal(t, "info", enriched.Severity)
+	assert.Equal(t, Info2LevelNo, enriched.SeverityNumber)
+
+	// It refines a textual level that agrees with it...
+	enriched = Parse(`{"severity_number":18,"severity":"ERROR"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, Error2LevelNo, enriched.SeverityNumber)
+
+	// ...and loses to one that does not, so the two never contradict.
+	enriched = Parse(`{"severityNumber":10,"level":"error"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, ErrorLevelNo, enriched.SeverityNumber)
+
+	// A number outside the OTLP range names nothing.
+	enriched = Parse(`{"severityNumber":99}`)
+	assert.Empty(t, enriched.Severity)
+	assert.Equal(t, 0, enriched.SeverityNumber)
+}
+
+func TestParse_JSON_ECSAndOTelErrorFields(t *testing.T) {
+	enriched := Parse(`{"log.level":"error","message":"upload failed","service.name":"media-api","service.version":"1.2.0","error.type":"System.IO.IOException","error.message":"disk full","error.stack_trace":"   at Acme.Media.Upload()"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, "upload failed", enriched.Message)
+	assert.Equal(t, "media-api", enriched.Service)
+	assert.Equal(t, "1.2.0", enriched.Version)
+	assert.Equal(t, "System.IO.IOException", enriched.ExceptionType)
+	assert.Equal(t, "disk full", enriched.ExceptionMessage)
+	assert.Equal(t, "   at Acme.Media.Upload()", enriched.ExceptionStackTrace)
+
+	// A Python/structlog "exception" string is a whole payload, like Serilog's @x.
+	enriched = Parse(`{"levelname":"ERROR","logger":"app.web","exception":"ValueError: quantity must be positive\n  File \"app.py\", line 10"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, "app.web", enriched.SourceContext)
+	assert.Equal(t, "ValueError", enriched.ExceptionType)
+	assert.Equal(t, "quantity must be positive", enriched.ExceptionMessage)
+}
+
+// An exception payload with no level of its own is an error, matching what the
+// pattern table does for a Go panic or a Python traceback.
+func TestParse_JSON_ExceptionImpliesError(t *testing.T) {
+	enriched := Parse(`{"@t":"2026-03-14T09:26:53Z","@x":"System.Exception: boom\n   at Program.Main()"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, ErrorLevelNo, enriched.SeverityNumber)
+
+	// An explicit level still wins: Serilog logs a caught exception at warn.
+	enriched = Parse(`{"@l":"Warning","@x":"System.Exception: boom"}`)
+	assert.Equal(t, "warn", enriched.Severity)
+}
+
+func TestParse_JSON_NestedMetadataIsLifted(t *testing.T) {
+	// The Docker json-file envelope has no metadata of its own; everything the
+	// embedded line carries is lifted, and the line itself becomes the message.
+	enriched := Parse(`{"log":"{\"@l\":\"Error\",\"@m\":\"order rejected\",\"@mt\":\"order {Id} rejected\",\"SourceContext\":\"Acme.Orders\",\"traceID\":\"4bf92f3577b34da6a3ce929d0e0e4736\"}","stream":"stdout","time":"2026-07-06T12:00:00Z"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, "order rejected", enriched.Message)
+	assert.Equal(t, "order {Id} rejected", enriched.Template)
+	assert.Equal(t, "Acme.Orders", enriched.SourceContext)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", enriched.TraceID)
+	// The envelope's own timestamp is authoritative.
+	assert.Equal(t, "2026-07-06 12:00:00 +0000 UTC", enriched.Time.String())
+
+	// A plain-text payload is the message verbatim, without Docker's newline.
+	enriched = Parse(`{"log":"ERROR: connection refused\n","stream":"stderr","time":"2026-07-06T12:00:00Z"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, "ERROR: connection refused", enriched.Message)
+}
+
+func TestParse_JSON_PinoPrettyPrinted(t *testing.T) {
+	enriched := Parse(`{"level": 50, "time": 1751805600000, "msg": "connection refused"}`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Equal(t, "connection refused", enriched.Message)
+}
+
+// resourceGroupRE is the pattern resourceGroup replaced, kept as the oracle
+// for the hand-rolled scan that took its place (the regexp package allocates
+// its match slice, which put an allocation on every Azure line).
+var resourceGroupRE = regexp.MustCompile(`(?i)/subscriptions/[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}/resourcegroups/[^/]+`)
+
+func regexResourceGroup(id string) string {
+	if match := resourceGroupRE.FindString(id); match != "" {
+		return match
+	}
+	return ""
+}
+
+// TestResourceGroupMatchesRegex differential-tests the scan against the regex,
+// over hand-picked shapes and a randomized sweep of the alphabet the pattern
+// is built from.
+func TestResourceGroupMatchesRegex(t *testing.T) {
+	check := func(id string) {
+		t.Helper()
+		assert.Equal(t, regexResourceGroup(id), resourceGroup(id), "resource id %q", id)
+	}
+
+	const guid = "11111111-2222-3333-4444-555555555555"
+	for _, id := range []string{
+		"",
+		"/subscriptions/" + guid + "/resourcegroups/shop",
+		"/subscriptions/" + guid + "/resourcegroups/shop/providers/microsoft.web/sites/orders",
+		"/subscriptions/" + guid + "/resourcegroups/shop-eu_1.prod/providers/x",
+		"/subscriptions/" + guid + "/resourcegroups/",                          // empty group name
+		"/subscriptions/" + guid + "/resourcegroups",                           // no trailing slash
+		"/subscriptions/" + guid + "/providers/microsoft.web",                  // no group
+		"/subscriptions/1111/resourcegroups/shop",                              // short guid
+		"/subscriptions/" + guid + "x/resourcegroups/shop",                     // guid too long
+		"/subscriptions/" + guid[:8] + "x" + guid[9:] + "/resourcegroups/shop", // dash replaced
+		"prefix/subscriptions/" + guid + "/resourcegroups/shop/x",              // unanchored
+		"/subscriptions/nope/subscriptions/" + guid + "/resourcegroups/shop",   // second occurrence wins
+		"/subscriptions/",
+		"/subscriptions/" + guid,
+	} {
+		check(id)
+	}
+
+	const alphabet = "0159abcdef-/subscriptonrgh"
+	rng := rand.New(rand.NewSource(2))
+	buf := make([]byte, 0, 80)
+	for i := 0; i < 200000; i++ {
+		buf = buf[:0]
+		for n := rng.Intn(80); n > 0; n-- {
+			buf = append(buf, alphabet[rng.Intn(len(alphabet))])
+		}
+		check(string(buf))
+	}
+
+	// Randomly damaged real resource IDs: the shapes a sweep rarely stumbles on.
+	full := "/subscriptions/" + guid + "/resourcegroups/shop/providers/microsoft.web/sites/orders"
+	for i := 0; i < 20000; i++ {
+		b := []byte(full)
+		for n := rng.Intn(3) + 1; n > 0; n-- {
+			b[rng.Intn(len(b))] = alphabet[rng.Intn(len(alphabet))]
+		}
+		check(string(b))
+	}
+}
+
+func TestParse_SeverityVocabulary(t *testing.T) {
+	// Spellings from vocabularies the six canonical names do not cover; where
+	// the source grades within a level, the OTLP number keeps the grading.
+	for _, tc := range []struct {
+		text  string
+		level string
+		no    int
+	}{
+		{"notice", InfoLevel, Info2LevelNo}, // syslog, Apache, nginx
+		{"NOTICE", InfoLevel, Info2LevelNo},
+		{"alert", FatalLevel, Fatal2LevelNo},
+		{"emerg", FatalLevel, Fatal3LevelNo},
+		{"emergency", FatalLevel, Fatal3LevelNo},
+		{"Verbose", TraceLevel, TraceLevelNo}, // Serilog
+		{"VRB", TraceLevel, TraceLevelNo},
+		{"SEVERE", ErrorLevel, ErrorLevelNo}, // java.util.logging
+		{"FINE", DebugLevel, DebugLevelNo},
+		{"FINEST", TraceLevel, TraceLevelNo},
+	} {
+		level, no := SeverityFromText(tc.text)
+		assert.Equal(t, tc.level, level, "text %q", tc.text)
+		assert.Equal(t, tc.no, no, "text %q", tc.text)
+
+		// The number survives the JSON path, which used to normalize the text
+		// and drop it.
+		enriched := Parse(`{"level":"` + tc.text + `"}`)
+		assert.Equal(t, tc.level, enriched.Severity, "text %q", tc.text)
+		assert.Equal(t, tc.no, enriched.SeverityNumber, "text %q", tc.text)
+
+		enriched = Parse(`level=` + tc.text + ` msg=x`)
+		assert.Equal(t, tc.level, enriched.Severity, "logfmt %q", tc.text)
+		assert.Equal(t, tc.no, enriched.SeverityNumber, "logfmt %q", tc.text)
+	}
+
+	// An Apache error log grades its own vocabulary.
+	enriched := Parse(`[Wed Oct 11 14:32:52 2000] [notice] [client 203.0.113.1] caught SIGTERM, shutting down`)
+	assert.Equal(t, "info", enriched.Severity)
+	assert.Equal(t, Info2LevelNo, enriched.SeverityNumber)
+}
+
+// The response_code 0 rules are inferences from a missing response, so a level
+// the line states outright wins over both of them.
+func TestParse_JSON_ZeroCodeKeepsExplicitSeverity(t *testing.T) {
+	assert.Equal(t, "error", Parse(`{"level":"error","response_code":0}`).Severity)
+	assert.Equal(t, "error", Parse(`{"level":"error","response_code":0,"protocol":"HTTP/2","response_flags":"DC"}`).Severity)
+	// With no level of its own, Envoy's TCP-proxy line is still info.
+	assert.Equal(t, "info", Parse(`{"response_code":0}`).Severity)
 }

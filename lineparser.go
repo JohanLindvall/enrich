@@ -397,8 +397,15 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 			result.Time = ts
 		}
 	case "response_code":
-		if httpSev := parseHTTPResponseSeverity(value, StatusObserved); httpSev != "" {
-			result.Severity = httpSev
+		// An access log observes the code rather than reporting a failure, so
+		// a 4xx grades to warn; the code itself is kept either way.
+		if code, err := strconv.ParseInt(value, 10, 64); err == nil {
+			if code >= 100 && code <= 599 {
+				result.HTTPStatusCode = int(code)
+			}
+			if httpSev := HTTPStatusSeverity(code, StatusObserved); httpSev != "" {
+				result.Severity = httpSev
+			}
 		}
 	case "sysloglevel":
 		result.Severity, result.SeverityNumber = syslogSeverity(int(value[0] - '0'))

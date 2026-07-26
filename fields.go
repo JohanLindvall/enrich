@@ -41,18 +41,32 @@ type enrichFields struct {
 	// Capital "Level" is deliberately excluded: Serilog emits severity as @l and
 	// uses "Level" for a message property (e.g. "Level":"Domains"), which must not
 	// clobber the real severity.
-	Severity      string `json:"severity|Severity|@l|@level|level,nocopy,lax"`
-	TraceID       string `json:"traceid|traceID|TraceId|TraceID|trace_id|request_id,nocopy,lax"`
-	SpanID        string `json:"spanid|spanID|SpanId|SpanID|span_id,nocopy,lax"`
-	SourceContext string `json:"sourcecontext|sourceContext|SourceContext,nocopy,lax"`
+	Severity string `json:"severity|Severity|severityText|SeverityText|log.level|levelname|@l|@level|level,nocopy,lax"`
+	// The OpenTelemetry SeverityNumber, carried by OTLP-JSON log records. It
+	// only refines the level (notice being an info that outranks a plain one),
+	// so a textual severity that disagrees with it wins; see applySeverityHints.
+	SeverityNumber json.Number `json:"severityNumber|severity_number,nocopy,lax"`
+	// Message is the rendered log message. Serilog's @m and @mt differ: @mt is
+	// the template with holes, @m the filled-in text, and both are kept.
+	Message       string `json:"@m|message|Message|MESSAGE|msg,nocopy,lax"`
+	TraceID       string `json:"traceid|traceId|traceID|TraceId|TraceID|trace_id|trace.id|request_id,nocopy,lax"`
+	SpanID        string `json:"spanid|spanId|spanID|SpanId|SpanID|span_id|span.id,nocopy,lax"`
+	Traceparent   string `json:"traceparent|Traceparent|TraceParent,nocopy,lax"`
+	SourceContext string `json:"sourcecontext|sourceContext|SourceContext|logger|loggerName|logger_name,nocopy,lax"`
 	TemplateHash  string `json:"@i,nocopy,lax"`
 	Template      string `json:"@mt,nocopy,lax"`
 	ResourceID    string `json:"resourceID|resourceId|ResourceId|resourceUri|resourceURI,nocopy,lax"`
 	EventCategory string `json:"eventCategory|eventcategory|EventCategory,nocopy,lax"`
-	Version       string `json:"@sv,nocopy,lax"`
-	Service       string `json:"@sn,nocopy,lax"`
+	Version       string `json:"@sv|service.version,nocopy,lax"`
+	Service       string `json:"@sn|service.name,nocopy,lax"`
 	Product       string `json:"@sp,nocopy,lax"`
-	Exception     string `json:"@x,nocopy,lax"`
+	// Exception is a whole exception payload (type, message and stack trace in
+	// one string), split by parseException. The ECS/OTel semantic-convention
+	// spellings carry the same information pre-split, in Error* below.
+	Exception    string `json:"@x|exception,nocopy,lax"`
+	ErrorType    string `json:"error.type|exception.type,nocopy,lax"`
+	ErrorMessage string `json:"error.message|exception.message,nocopy,lax"`
+	ErrorStack   string `json:"error.stack_trace|exception.stacktrace,nocopy,lax"`
 
 	ResultType        string `json:"resultType,nocopy,lax"`
 	ResultDescription string `json:"resultDescription,nocopy,lax"`
@@ -66,7 +80,7 @@ type enrichFields struct {
 	MongoTime     mongoDate `json:"t,nocopy,lax"`
 	MongoSeverity string    `json:"s,nocopy,lax"`
 
-	ResponseCode     json.Number `json:"response_code|responseCode|statusCode|StatusCode,nocopy,lax"`
+	ResponseCode     json.Number `json:"response_code|responseCode|status_code|statusCode|StatusCode|http.response.status_code,nocopy,lax"`
 	GrpcStatusNumber json.Number `json:"grpc_status_number,nocopy,lax"`
 	Protocol         string      `json:"protocol,nocopy,lax"`
 	ResponseFlags    string      `json:"response_flags,nocopy,lax"`

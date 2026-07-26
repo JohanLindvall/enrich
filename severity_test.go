@@ -103,11 +103,29 @@ func TestHTTPStatusSeverity(t *testing.T) {
 	}
 }
 
-func TestParseHTTPResponseSeverity(t *testing.T) {
-	assert.Equal(t, InfoLevel, parseHTTPResponseSeverity("200", StatusObserved))
-	assert.Equal(t, ErrorLevel, parseHTTPResponseSeverity("404", StatusFailure))
-	assert.Equal(t, "", parseHTTPResponseSeverity("abc", StatusObserved), "non-numeric")
-	assert.Equal(t, "", parseHTTPResponseSeverity("9999", StatusObserved), "out of range")
+func TestSetHTTPResponseCode(t *testing.T) {
+	// The code is recorded whatever the severity ends up being.
+	var r Result
+	setHTTPResponseCode(&r, 200, StatusObserved)
+	assert.Equal(t, InfoLevel, r.Severity)
+	assert.Equal(t, 200, r.HTTPStatusCode)
+
+	r = Result{Severity: DebugLevel}
+	setHTTPResponseCode(&r, 404, StatusObserved)
+	assert.Equal(t, DebugLevel, r.Severity, "an explicit level is not overridden by an observed code")
+	assert.Equal(t, 404, r.HTTPStatusCode)
+
+	r = Result{Severity: DebugLevel}
+	setHTTPResponseCode(&r, 404, StatusFailure)
+	assert.Equal(t, ErrorLevel, r.Severity, "a reported failure does override it")
+
+	// Values that are not HTTP statuses are not recorded as one.
+	r = Result{}
+	setHTTPResponseCode(&r, 0, StatusObserved)
+	assert.Equal(t, ErrorLevel, r.Severity, "no response at all")
+	assert.Zero(t, r.HTTPStatusCode)
+	setHTTPResponseCode(&r, 9999, StatusObserved)
+	assert.Zero(t, r.HTTPStatusCode)
 }
 
 func TestSyslogSeverity(t *testing.T) {
@@ -116,9 +134,11 @@ func TestSyslogSeverity(t *testing.T) {
 		want   string
 		wantNo int
 	}{
-		{0, FatalLevel, FatalLevelNo},
-		{1, FatalLevel, FatalLevelNo},
-		{2, FatalLevel, FatalLevelNo},
+		// The three fatal syslog severities keep their grading in the OTLP
+		// number, as the OpenTelemetry logs data model maps them.
+		{0, FatalLevel, Fatal3LevelNo}, // emergency
+		{1, FatalLevel, Fatal2LevelNo}, // alert
+		{2, FatalLevel, FatalLevelNo},  // critical
 		{3, ErrorLevel, ErrorLevelNo},
 		{4, WarnLevel, WarnLevelNo},
 		{5, InfoLevel, Info2LevelNo}, // notice: finer-grained INFO2
@@ -189,6 +209,17 @@ var normalizeReg = []struct {
 	{regexp.MustCompile(`^(?i)(w(a?rn(ing)?)?)$`), WarnLevel, WarnLevelNo},
 	{regexp.MustCompile(`^(?i)(e(rr(or)?)?)$`), ErrorLevel, ErrorLevelNo},
 	{regexp.MustCompile(`^(?i)(fatal|f(tl)?|crit(ical)?|panic|pnc)$`), FatalLevel, FatalLevelNo},
+
+	// Added after the table replaced the regexes; kept in the same form so the
+	// differential test covers the whole accepted language, not just its
+	// historical core.
+	{regexp.MustCompile(`^(?i)(notice|ntc)$`), InfoLevel, Info2LevelNo},
+	{regexp.MustCompile(`^(?i)alert$`), FatalLevel, Fatal2LevelNo},
+	{regexp.MustCompile(`^(?i)emerg(ency)?$`), FatalLevel, Fatal3LevelNo},
+	{regexp.MustCompile(`^(?i)(verbose|vrb)$`), TraceLevel, TraceLevelNo},
+	{regexp.MustCompile(`^(?i)severe$`), ErrorLevel, ErrorLevelNo},
+	{regexp.MustCompile(`^(?i)fine$`), DebugLevel, DebugLevelNo},
+	{regexp.MustCompile(`^(?i)fine(r|st)$`), TraceLevel, TraceLevelNo},
 }
 
 func regexSeverity(input string) (string, int) {
@@ -228,7 +259,7 @@ func TestSeverityLUTMatchesRegexes(t *testing.T) {
 
 	// Randomized sweep over the pattern alphabet: any disagreement between the
 	// table and the regexes shows up here.
-	const alphabet = "abcdefgilmnoprtuw0123456789"
+	const alphabet = "abcdefgilmnoprstuvwy0123456789"
 	rng := rand.New(rand.NewSource(1))
 	buf := make([]byte, 0, 14)
 	for i := 0; i < 500000; i++ {

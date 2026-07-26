@@ -1,10 +1,10 @@
 # CLAUDE.md — enrich
 
-Log-line metadata extraction: timestamp, normalized severity, trace/span IDs,
-structured-log fields, Azure resource metadata, exception details. Entry
-points: `Parse(string) *Result` (allocates the Result), `ParseInto(string,
-*Result) bool` and `ParseBytes([]byte, *Result) bool` (caller-owned Result;
-allocation-free).
+Log-line metadata extraction: timestamp, normalized severity, message,
+trace/span IDs, HTTP status code, structured-log fields, Azure resource
+metadata, exception details. Entry points: `Parse(string) *Result` (allocates
+the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
+*Result) bool` (caller-owned Result; allocation-free).
 
 ## Layout
 
@@ -33,7 +33,9 @@ allocation-free).
   is decided in O(1) (an unknown word used to cost ~330 ns walking 8 regexes;
   it now costs ~12 ns). The regexes live on in `severity_test.go` as an
   oracle, and a 500k-input randomized differential test pins the table to
-  them — extend the table and that test together.
+  them — extend the table and that test together, **including
+  `severityInitials`** (the one-byte prefilter: a spelling whose first letter
+  is missing there is never looked up) and the sweep's alphabet.
 - `testdata/fuzz/FuzzParse/` — the corpus the fuzzer accumulated. `go test`
   replays every entry as a seed, so it is a regression suite; add to it by
   running the fuzzer and copying new finds out of `$(go env GOCACHE)/fuzz`.
@@ -48,7 +50,31 @@ allocation-free).
   is enriched first so authoritative top-level scalars (notably the Azure
   "time") win over lifted values. `level` is listed last in the Severity tag
   so a later textual value wins; capital `"Level"` is deliberately excluded
-  (Serilog uses it for a message property, not severity).
+  (Serilog uses it for a message property, not severity). Because
+  `mergeNested` now lifts *every* field the embedded line carried, the
+  envelope's own assignments in `applyMetadata` must stay conditional
+  (`setIfSet`) — an unconditional `result.X = f.X` would clobber a lifted
+  value with the envelope's empty one.
+- **Severity and SeverityNumber must never contradict each other.** Anything
+  in `Result` may set both, and a later signal may rename the level (a
+  "notice" line that then reports a 500); `ParseInto`'s final step therefore
+  drops a pre-set number whose `SeverityFromNumber` no longer matches the
+  text. Don't push that check back into the individual parsers — it is
+  exactly the invariant `FuzzParse` asserts on every input.
+- **All-zero trace/span IDs are rejected** (`validTraceID`/`validSpanID`).
+  They are W3C trace-context's "invalid" value, which OTel SDKs emit for a
+  record with no active span; accepting them files every untraced line in a
+  fleet under one trace.
+- **`Result.Message` is JSON/logfmt only.** The pattern table captures no
+  message — a plain-text line's message is not separable from `Body`. The
+  logfmt scan stores `msg=` even when it does *not* claim the line, so a
+  key=value line the table resolves (a Kubernetes event) still gets one.
+- **`resourceGroup` is a hand scan, not a regexp**, because every match form
+  the regexp package offers allocates its result slice — that was one
+  allocation on every Azure line, and the scan is also ~2x faster on the
+  Azure benchmark. `enrich_test.go` keeps the original pattern as an oracle
+  and differential-tests the scan against it, as `severity_test.go` does for
+  the severity LUT.
 - **`enrichFromLogFmt` runs before the pattern table** and also handles the
   level-only case; the table's logfmt-ish entries only see lines without
   `=` pairs. It scans the whole line (no early exit) so trace_id/span_id/
@@ -103,13 +129,25 @@ lightning's `nocopy`/`lax` tag options as unknown. Don't widen the exclusion.
 
 `Parse` is on a hot path (one call per log line). Current numbers
 (Ryzen 7 8840HS, amd64), with the result escaping as it does for a real
-caller: ~480 ns / 1 alloc for a ~900 B JSON line, ~760 ns / 1 alloc for a
-~1.9 kB logfmt line, ~865 ns / 2 allocs for a pattern-table line, ~320 ns /
+caller: ~490 ns / 1 alloc for a ~900 B JSON line, ~750 ns / 1 alloc for a
+~1.9 kB logfmt line, ~700 ns / 2 allocs for a pattern-table line, ~900 ns /
+2 allocs for an Azure record with a nested `properties.log`, ~226 ns /
 1 alloc for a 1 kB line that matches nothing. **That single alloc is the
-320 B `Result` itself** — `ParseInto` with a reused `Result` is fully
-zero-allocation (~370 ns), and is what a per-line pipeline should call.
+352 B `Result` itself** — `ParseInto` with a reused `Result` is fully
+zero-allocation (~365 ns), and is what a per-line pipeline should call.
 
-The parsing work itself allocates nothing on the JSON and logfmt paths:
+**Adding a field to `Result` or `enrichFields` costs real time; adding a key
+spelling to an existing field does not.** Measured: the ~20 extra aliases
+(ECS dotted keys, `traceId`, `message`, ...) are free to within noise, while
+the five new fields behind them plus the wider `Result` cost ~25 ns on the
+JSON line (and pushed the `Result` from the 320 B size class to 352 B). Weigh
+new fields accordingly; weigh new spellings barely at all.
+
+The parsing work itself allocates nothing on the JSON and logfmt paths. What
+does allocate is anything the input does not contain verbatim: an escaped
+JSON string (the decoder must unescape), an uppercase Azure resource ID
+(`lower` returns the input unchanged when it is already lowercase), a dashed
+trace ID, and the `[]int` of a pattern-table match.
 
 - **Never add a `*int64` (or other pointer) field to `enrichFields`.** The
   generated decoder heap-allocates the pointee, once per line per field. Use
@@ -125,7 +163,10 @@ The parsing work itself allocates nothing on the JSON and logfmt paths:
   Keep new table entries free of unnamed capturing groups.
 - Trace/span IDs are validated by hand (`validTraceID`/`validSpanID`), not by
   regex — the old regexes cost ~40% of the JSON path on a line carrying a
-  request_id.
+  request_id. Same reasoning retired `resourceGroupRE`.
+- **A string carried inside JSON is still the input's memory.** Decode it with
+  `unsafe.Slice(unsafe.StringData(s), len(s))`, never `[]byte(s)` — the
+  conversion copied `properties.response` on every Azure line.
 
 The pattern table is ordered roughly most-common-first; every entry needs
 either a `firstBytes` classifier match or a `contain` substring pre-filter

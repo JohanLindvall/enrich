@@ -83,12 +83,25 @@ func init() {
 	add(WarnLevel, WarnLevelNo, "w", "wrn", "warn", "wrning", "warning")
 	add(ErrorLevel, ErrorLevelNo, "e", "err", "error")
 	add(FatalLevel, FatalLevelNo, "fatal", "f", "ftl", "crit", "critical", "panic", "pnc")
+
+	// Spellings from level vocabularies the six canonical names do not cover.
+	// Where a source grades within a level, the OTLP number records the
+	// grading that the canonical text flattens away — syslog's notice is an
+	// info that outranks a plain one, its alert a fatal that outranks a
+	// critical (the same mapping syslogSeverity applies to the numeric form).
+	add(InfoLevel, Info2LevelNo, "notice", "ntc") // syslog, Apache, nginx
+	add(FatalLevel, Fatal2LevelNo, "alert")
+	add(FatalLevel, Fatal3LevelNo, "emerg", "emergency")
+	add(TraceLevel, TraceLevelNo, "verbose", "vrb") // Serilog's lowest level
+	add(ErrorLevel, ErrorLevelNo, "severe")         // java.util.logging
+	add(DebugLevel, DebugLevelNo, "fine")
+	add(TraceLevel, TraceLevelNo, "finer", "finest")
 }
 
 // severityInitials are the first letters of every entry in severityLUT. A
 // single byte test rejects the overwhelming majority of non-levels (any word
 // the pattern table happened to capture as a level) before hashing anything.
-const severityInitials = "tdinlwefcp"
+const severityInitials = "tdinlwefcpavs"
 
 // lookupSeverity does the case-insensitive LUT lookup without allocating: the
 // lowercased key is built on the stack.
@@ -168,11 +181,18 @@ func SeverityFromNumber(severity int) string {
 }
 
 // syslogSeverity maps a syslog severity (0-7, the low three bits of the
-// priority) to a normalized level and OTLP severity number. Notice (5) maps
-// to info with the finer-grained INFO2 number.
+// priority) to a normalized level and OTLP severity number, following the
+// mapping in the OpenTelemetry logs data model. Three syslog severities are
+// fatal and three are info-or-below, so the OTLP numbers keep the grading the
+// six canonical levels flatten away: notice is INFO2, alert FATAL2, emergency
+// FATAL3.
 func syslogSeverity(level int) (string, int) {
 	switch level {
-	case 0, 1, 2: // emergency, alert, critical
+	case 0: // emergency
+		return FatalLevel, Fatal3LevelNo
+	case 1: // alert
+		return FatalLevel, Fatal2LevelNo
+	case 2: // critical
 		return FatalLevel, FatalLevelNo
 	case 3:
 		return ErrorLevel, ErrorLevelNo
@@ -201,6 +221,10 @@ func pinoSeverity(message string) string {
 		return ""
 	}
 	rest := message[i+len(key):]
+	// An encoder that pretty-prints puts whitespace after the colon.
+	for len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t' || rest[0] == '\n' || rest[0] == '\r') {
+		rest = rest[1:]
+	}
 	j := 0
 	for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
 		j++
@@ -237,14 +261,6 @@ func getRedisSeverityText(severity string) string {
 	case "#":
 		return WarnLevel
 	}
-	return ""
-}
-
-func parseHTTPResponseSeverity(value string, kind StatusKind) string {
-	if code, err := strconv.ParseInt(value, 10, 64); err == nil && code >= 0 && code <= 599 {
-		return HTTPStatusSeverity(code, kind)
-	}
-
 	return ""
 }
 
@@ -286,7 +302,15 @@ func HTTPStatusSeverity(code int64, kind StatusKind) string {
 	return ""
 }
 
+// setHTTPResponseCode records an HTTP status code on the result and grades it
+// into a severity. The code is kept whatever the severity ends up being: it is
+// metadata in its own right, and a caller that wants to route on the number
+// should not have to re-parse the line. A code outside 100-599 is not an HTTP
+// status (Envoy writes 0 for "no response at all") and is not recorded.
 func setHTTPResponseCode(result *Result, code int64, kind StatusKind) {
+	if code >= 100 && code <= 599 {
+		result.HTTPStatusCode = int(code)
+	}
 	if kind == StatusFailure || result.Severity == "" || result.Severity == "info" {
 		if httpSev := HTTPStatusSeverity(code, kind); httpSev != "" {
 			result.Severity = httpSev

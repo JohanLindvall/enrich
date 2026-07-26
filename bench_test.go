@@ -80,3 +80,17 @@ func BenchmarkParseBytes(b *testing.B) {
 	}
 	sink = &r
 }
+
+// An Azure diagnostic-log record: a resource ID to lowercase and scan for the
+// resource group, and a nested properties.log line enriched recursively. The
+// remaining allocation is the unescaping of the embedded JSON string, which
+// cannot alias the input.
+var azureLine = `{"time":"2026-03-14T09:26:53.394Z","resourceId":"/SUBSCRIPTIONS/11111111-1111-1111-1111-111111111111/RESOURCEGROUPS/SHOP/PROVIDERS/MICROSOFT.WEB/SITES/ORDERS-API","category":"AppServiceConsoleLogs","operationName":"Microsoft.Web/sites/log","eventCategory":"Administrative","properties":{"log":"{\"@t\":\"2026-03-14T09:26:53.390Z\",\"@l\":\"Error\",\"@m\":\"order 42 rejected\",\"SourceContext\":\"Acme.Orders.Validator\",\"traceID\":\"aabbccdd11223344556677889900aabb\"}"}}`
+
+func BenchmarkParseAzure(b *testing.B) {
+	var r Result
+	for n := 0; n < b.N; n++ {
+		ParseInto(azureLine, &r)
+	}
+	sink = &r
+}

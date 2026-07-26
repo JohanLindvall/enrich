@@ -280,3 +280,46 @@ func TestParseInto_ResetsResult(t *testing.T) {
 	assert.Empty(t, r.Severity)
 	assert.Equal(t, FormatNone, r.Format)
 }
+
+// The severity text and number must never contradict each other, whichever
+// parser set them and in whatever order. A "notice" is an info with the INFO2
+// number until a later signal in the same line renames the level, at which
+// point the number has to follow.
+func TestParse_SeverityNumberFollowsOverriddenText(t *testing.T) {
+	enriched := Parse(`{"level":"notice","response_code":500}`)
+	assert.Equal(t, WarnLevel, enriched.Severity)
+	assert.Equal(t, WarnLevelNo, enriched.SeverityNumber)
+
+	enriched = Parse(`{"level":"notice"}`)
+	assert.Equal(t, InfoLevel, enriched.Severity)
+	assert.Equal(t, Info2LevelNo, enriched.SeverityNumber, "an untouched level keeps its grading")
+
+	// A level that normalizes to nothing leaves no number behind either.
+	enriched = Parse(`{"severityNumber":99,"level":"v2-preview"}`)
+	assert.Empty(t, enriched.Severity)
+	assert.Zero(t, enriched.SeverityNumber)
+
+	// ...but a valid OTLP number names the level on its own, whatever the
+	// unrecognized text alongside it says.
+	enriched = Parse(`{"severityNumber":10,"level":"v2-preview"}`)
+	assert.Equal(t, InfoLevel, enriched.Severity)
+	assert.Equal(t, Info2LevelNo, enriched.SeverityNumber)
+}
+
+func TestParse_JSON_Traceparent(t *testing.T) {
+	// A propagated traceparent carries both IDs.
+	enriched := Parse(`{"level":"info","traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}`)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", enriched.TraceID)
+	assert.Equal(t, "00f067aa0ba902b7", enriched.SpanID)
+
+	// An explicit span_id is the record's own span and wins over the
+	// propagated one.
+	enriched = Parse(`{"traceparent":"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01","span_id":"1111222233334444"}`)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", enriched.TraceID)
+	assert.Equal(t, "1111222233334444", enriched.SpanID)
+
+	// A malformed value leaves both empty.
+	enriched = Parse(`{"traceparent":"garbage"}`)
+	assert.Empty(t, enriched.TraceID)
+	assert.Empty(t, enriched.SpanID)
+}

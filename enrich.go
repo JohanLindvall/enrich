@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/JohanLindvall/logfmt"
@@ -21,37 +22,107 @@ func isHex(c byte) bool {
 // anchored — a field that merely *contains* 32 hex digits somewhere in a
 // larger sentence is not a trace ID, and validating it as one used to store
 // the entire sentence in Result.TraceID.
+//
+// An all-zero ID is rejected: W3C trace-context defines it as the invalid
+// value, and that is exactly what OpenTelemetry SDKs emit for a log record
+// with no active span. Storing it would correlate every untraced line in a
+// fleet under one trace.
 func validTraceID(s string) bool {
 	if len(s) < 32 || len(s) > 36 {
 		return false
 	}
-	hex := 0
+	hex, zeros := 0, 0
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
 		case isHex(c):
 			hex++
+			if c == '0' {
+				zeros++
+			}
 		case c != '-':
 			return false
 		}
 	}
-	return hex == 32
+	return hex == 32 && zeros != 32
 }
 
-// validSpanID reports whether s is a whole span ID: exactly 16 hex digits.
+// validSpanID reports whether s is a whole span ID: exactly 16 hex digits, not
+// all zero (see validTraceID).
 func validSpanID(s string) bool {
 	if len(s) != 16 {
 		return false
 	}
+	zeros := 0
 	for i := 0; i < len(s); i++ {
 		if !isHex(s[i]) {
 			return false
 		}
+		if s[i] == '0' {
+			zeros++
+		}
+	}
+	return zeros != 16
+}
+
+var traceparentRE = regexp.MustCompile(`^traceparent[:=]\s*"?([0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2})`)
+
+// resourceGroup extracts the "/subscriptions/<guid>/resourcegroups/<name>"
+// prefix of an Azure resource ID — the scope a caller groups by — and returns
+// "" when id carries no such prefix. id must already be lowercased.
+//
+// This was a regexp; the equivalent scan is here because every match form the
+// regexp package offers (FindStringIndex included) allocates its result slice,
+// which put an allocation on every Azure diagnostic line. enrich_test.go keeps
+// the original pattern as an oracle and differential-tests this against it.
+func resourceGroup(id string) string {
+	const subscriptions = "/subscriptions/"
+	const resourceGroups = "/resourcegroups/"
+	const guidLen = len("00000000-0000-0000-0000-000000000000")
+
+	// The pattern is unanchored: a resource ID sometimes appears inside a
+	// longer path, so scan for each occurrence of the prefix.
+	for off := 0; ; {
+		i := strings.Index(id[off:], subscriptions)
+		if i < 0 {
+			return ""
+		}
+		i += off
+		off = i + len(subscriptions)
+		rest := id[off:]
+		if len(rest) < guidLen || !validGUID(rest[:guidLen]) {
+			continue
+		}
+		rest = rest[guidLen:]
+		if !strings.HasPrefix(rest, resourceGroups) {
+			continue
+		}
+		name := rest[len(resourceGroups):]
+		if end := strings.IndexByte(name, '/'); end >= 0 {
+			name = name[:end]
+		}
+		if name == "" { // "[^/]+": the group name must be non-empty
+			continue
+		}
+		return id[i : off+guidLen+len(resourceGroups)+len(name)]
+	}
+}
+
+// validGUID reports whether s is a dashed GUID: 8-4-4-4-12 hex digits.
+func validGUID(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch i {
+		case 8, 13, 18, 23:
+			if s[i] != '-' {
+				return false
+			}
+		default:
+			if !isHex(s[i]) {
+				return false
+			}
+		}
 	}
 	return true
 }
-
-var resourceGroupRE = regexp.MustCompile(`(?i)/subscriptions/[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}/resourcegroups/[^/]+`)
-var traceparentRE = regexp.MustCompile(`^traceparent[:=]\s*"?([0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2})`)
 
 // The parsing strategy that matched a line, reported in Result.Format.
 const (
@@ -78,6 +149,18 @@ type Result struct {
 	// SeverityFromText) and SeverityNumber its numeric equivalent.
 	Severity       string
 	SeverityNumber int
+
+	// Message is the log message itself, without the envelope the line carries
+	// it in: the "msg"/"message"/"@m" value of a JSON or logfmt line, or the
+	// embedded line of a Docker json-file record. It is empty for a plain-text
+	// line, whose message is not separable from Body.
+	Message string
+
+	// HTTPStatusCode is the HTTP response code the line reports (Envoy's
+	// response_code, an Azure httpStatusCode or resultDescription, an access
+	// log's status field, ...), or 0 when the line reports none. It is the
+	// number behind the severity that HTTPStatusSeverity derives.
+	HTTPStatusCode int
 
 	// Trace correlation identifiers.
 	TraceID string
@@ -157,7 +240,7 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 
 	var ts time.Time
 	var tsFound, levelGood bool
-	var level, traceID, spanID string
+	var level, msg, traceID, spanID string
 
 	// message is immutable; alias its bytes rather than copying.
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
@@ -182,11 +265,15 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 					level = sval
 				}
 			}
-		case "traceid", "traceID", "TraceId", "TraceID", "trace_id":
+		case "msg", "message":
+			if msg == "" {
+				msg = sval
+			}
+		case "traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id":
 			if traceID == "" {
 				traceID = sval
 			}
-		case "spanid", "spanID", "SpanId", "SpanID", "span_id":
+		case "spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id":
 			if spanID == "" {
 				spanID = sval
 			}
@@ -206,6 +293,10 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 	}
 	result.Time = ts
 	result.Severity = level
+	// The message is kept even when the line is not claimed as logfmt: a
+	// key=value line the pattern table resolves instead (a Kubernetes event,
+	// say) still carries its msg= in the same place.
+	result.Message = msg
 	return tsFound || level != "" || result.TraceID != ""
 }
 
@@ -270,11 +361,15 @@ func ParseInto(input string, result *Result) bool {
 		result.Format = FormatPattern
 	}
 
-	// Normalize the severity text; keep a finer-grained severity number (e.g.
-	// syslog notice -> INFO2) when the parser already set one.
+	// Normalize the severity text, and keep a finer-grained severity number
+	// (e.g. syslog notice -> INFO2) when a parser already set one — but only
+	// while it still agrees with the text. A severity set early and overridden
+	// later (a "notice" line that then reports a 500, say) would otherwise
+	// leave the number describing the level the text no longer names. Enforcing
+	// that here means no parser has to remember to clear it.
 	sev, no := SeverityFromText(result.Severity)
 	result.Severity = sev
-	if result.SeverityNumber == 0 || sev == "" {
+	if result.SeverityNumber == 0 || SeverityFromNumber(result.SeverityNumber) != sev {
 		result.SeverityNumber = no
 	}
 
@@ -348,6 +443,12 @@ func (result *Result) applyJSON(f *enrichFields) {
 	result.applySeverityHints(f)
 	result.applyMetadata(f)
 
+	// An exception payload with no level of its own is an error: the same rule
+	// the pattern table applies to a Go panic or a Python traceback.
+	if result.Severity == "" && (result.ExceptionType != "" || result.ExceptionMessage != "" || result.ExceptionStackTrace != "") {
+		result.Severity = ErrorLevel
+	}
+
 	if f.ResponseCode != "" {
 		responseCode = f.ResponseCode
 	}
@@ -366,7 +467,9 @@ func (result *Result) applyProperties(p *enrichProperties) json.Number {
 		result.mergeNested(&nested)
 	case p.Response != "":
 		var hr httpResponse
-		if err := hr.UnmarshalJSON([]byte(p.Response)); err == nil {
+		// p.Response aliases the immutable input and the decoder only reads
+		// it, so alias it once more instead of copying it into a []byte.
+		if err := hr.UnmarshalJSON(unsafe.Slice(unsafe.StringData(p.Response), len(p.Response))); err == nil {
 			if code, ok := jsonInt(hr.StatusCode); ok {
 				setHTTPResponseCode(result, code, StatusFailure)
 			}
@@ -391,18 +494,39 @@ func jsonInt(n json.Number) (int64, bool) {
 
 // mergeNested lifts the fields extracted from an embedded log line (a Docker
 // json-file "log" string or an Azure properties.log payload) into the result.
+// The caller applies the enclosing envelope's own values afterwards, so an
+// authoritative top-level scalar still wins over a lifted one.
 func (result *Result) mergeNested(nested *Result) {
 	if !nested.Time.IsZero() {
 		result.Time = nested.Time
 	}
-	if nested.Severity != "" {
-		result.Severity = nested.Severity
+	if nested.SeverityNumber != 0 {
+		result.SeverityNumber = nested.SeverityNumber
 	}
-	if nested.TraceID != "" {
-		result.TraceID = nested.TraceID
+	if nested.HTTPStatusCode != 0 {
+		result.HTTPStatusCode = nested.HTTPStatusCode
 	}
-	if nested.SpanID != "" {
-		result.SpanID = nested.SpanID
+	setIfSet(&result.Severity, nested.Severity)
+	setIfSet(&result.TraceID, nested.TraceID)
+	setIfSet(&result.SpanID, nested.SpanID)
+	setIfSet(&result.Template, nested.Template)
+	setIfSet(&result.TemplateHash, nested.TemplateHash)
+	setIfSet(&result.SourceContext, nested.SourceContext)
+	setIfSet(&result.Service, nested.Service)
+	setIfSet(&result.Version, nested.Version)
+	setIfSet(&result.Product, nested.Product)
+	setIfSet(&result.ExceptionType, nested.ExceptionType)
+	setIfSet(&result.ExceptionMessage, nested.ExceptionMessage)
+	setIfSet(&result.ExceptionStackTrace, nested.ExceptionStackTrace)
+
+	// The embedded line *is* the message of the record that wraps it, so a
+	// plain-text payload becomes the message verbatim (minus the trailing
+	// newline Docker keeps).
+	switch {
+	case nested.Message != "":
+		result.Message = nested.Message
+	case nested.Format != FormatJSON && nested.Body != "":
+		result.Message = strings.TrimRight(nested.Body, "\r\n")
 	}
 }
 
@@ -412,15 +536,29 @@ func (result *Result) mergeNested(nested *Result) {
 func (result *Result) applySeverityHints(f *enrichFields) {
 	// Severity from a textual level/severity field; numeric levels (e.g. Pino's
 	// "level":30) are skipped by the lax tag, leaving the last textual value.
+	// The number is kept alongside the text: a spelling can be finer-grained
+	// than the level it normalizes to ("notice" is an info with the INFO2
+	// number), and normalizing early used to throw that away.
 	if result.Severity == "" && f.Severity != "" {
-		if s, _ := SeverityFromText(f.Severity); s != "" {
-			result.Severity = s
+		if s, no := SeverityFromText(f.Severity); s != "" {
+			result.Severity, result.SeverityNumber = s, no
 		}
 	}
 
 	if result.Severity == "" && f.MongoSeverity != "" && !f.MongoTime.Date.IsZero() {
-		if s, _ := SeverityFromText(f.MongoSeverity); s != "" {
-			result.Severity = s
+		if s, no := SeverityFromText(f.MongoSeverity); s != "" {
+			result.Severity, result.SeverityNumber = s, no
+		}
+	}
+
+	// An OTLP-JSON record carries the OpenTelemetry SeverityNumber, which is
+	// finer-grained than the text (a 10 is a notice, an info that outranks a
+	// plain one). It names the level on its own, and refines a textual level
+	// that agrees with it; a text that disagrees wins, since Severity and
+	// SeverityNumber must never contradict each other.
+	if no, ok := jsonInt(f.SeverityNumber); ok && no >= 1 && no <= 24 {
+		if text := SeverityFromNumber(int(no)); text == result.Severity || result.Severity == "" {
+			result.Severity, result.SeverityNumber = text, int(no)
 		}
 	}
 
@@ -435,32 +573,62 @@ func (result *Result) applySeverityHints(f *enrichFields) {
 	}
 }
 
+// setIfSet assigns src to *dst unless src is empty, so an envelope that does
+// not carry a field leaves whatever a nested payload contributed in place.
+func setIfSet(dst *string, src string) {
+	if src != "" {
+		*dst = src
+	}
+}
+
 // applyMetadata copies the identifier and structured-log fields: validated
-// trace/span IDs, Serilog context fields, Azure resource metadata, and the
-// exception payload.
+// trace/span IDs, the message, Serilog context fields, Azure resource
+// metadata, and the exception payload.
 func (result *Result) applyMetadata(f *enrichFields) {
+	// A W3C traceparent carries both IDs and is the propagated value, so it
+	// loses to explicit trace_id/span_id fields but beats having neither.
+	if t, s := parseTraceparent(f.Traceparent); t != "" {
+		result.TraceID, result.SpanID = t, s
+	}
 	if validTraceID(f.TraceID) {
 		result.TraceID = removeDashesASCII(f.TraceID)
 	}
 	if validSpanID(f.SpanID) {
 		result.SpanID = f.SpanID
 	}
-	result.SourceContext = f.SourceContext
-	result.TemplateHash = f.TemplateHash
-	result.Template = f.Template
+	setIfSet(&result.Message, f.Message)
+	setIfSet(&result.SourceContext, f.SourceContext)
+	setIfSet(&result.TemplateHash, f.TemplateHash)
+	setIfSet(&result.Template, f.Template)
 	if f.ResourceID != "" {
-		result.ResourceID = strings.ToLower(f.ResourceID)
-		if match := resourceGroupRE.FindStringSubmatch(result.ResourceID); len(match) != 0 {
-			result.ResourceGroup = match[0]
-		}
+		result.ResourceID = lower(f.ResourceID)
+		result.ResourceGroup = resourceGroup(result.ResourceID)
 	}
-	result.EventCategory = f.EventCategory
-	result.Version = f.Version
-	result.Service = f.Service
-	result.Product = f.Product
+	setIfSet(&result.EventCategory, f.EventCategory)
+	setIfSet(&result.Version, f.Version)
+	setIfSet(&result.Service, f.Service)
+	setIfSet(&result.Product, f.Product)
+
+	// @x carries type, message and stack trace in one payload; the ECS/OTel
+	// spellings carry them apart and are authoritative when present.
 	if f.Exception != "" {
 		result.parseException(f.Exception)
 	}
+	setIfSet(&result.ExceptionType, f.ErrorType)
+	setIfSet(&result.ExceptionMessage, f.ErrorMessage)
+	setIfSet(&result.ExceptionStackTrace, f.ErrorStack)
+}
+
+// lower is strings.ToLower without its unconditional allocation: an Azure
+// resource ID that is already lowercase (many are) is returned as is, aliasing
+// the input like every other extracted field.
+func lower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; 'A' <= c && c <= 'Z' || c >= utf8.RuneSelf {
+			return strings.ToLower(s)
+		}
+	}
+	return s
 }
 
 // applyResponseCode maps HTTP-ish status information to a severity: first an
@@ -479,13 +647,21 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Numbe
 	if !ok {
 		return
 	}
+	// Both rules are inferences from a missing response, so they defer to a
+	// level the line states outright — the key also spells "statusCode" for
+	// producers that do log one.
 	if code == 0 {
+		explicit := result.Severity != "" && result.Severity != InfoLevel
 		if f.Protocol == "" {
-			result.Severity = InfoLevel
+			if !explicit {
+				result.Severity = InfoLevel
+			}
 			return
 		}
 		if strings.EqualFold(f.ResponseFlags, "DR") || strings.EqualFold(f.ResponseFlags, "DC") {
-			result.Severity = WarnLevel
+			if !explicit {
+				result.Severity = WarnLevel
+			}
 			return
 		}
 	}
@@ -525,17 +701,25 @@ func (result *Result) enrichFromPatterns(message string) bool {
 	return matched
 }
 
+// parseException splits a .NET-style exception payload — "Type: message"
+// followed by the stack trace — into its three parts. Every part is a slice of
+// exception (Cut, not Split: the slices allocate a header array per call and
+// this runs per line on error-heavy streams).
 func (result *Result) parseException(exception string) {
-	lines := strings.SplitN(exception, "\n", 2)
-	typeAndMessage := strings.SplitN(lines[0], ": ", 2)
-	if len(typeAndMessage) == 2 {
-		result.ExceptionType = strings.Split(typeAndMessage[0], " ")[0]
-		result.ExceptionMessage = typeAndMessage[1]
+	head, stack, hasStack := strings.Cut(exception, "\n")
+	if excType, message, ok := strings.Cut(head, ": "); ok {
+		// "Exception in thread "main" java.lang.IllegalStateException" and the
+		// like put words before the type; the type is the first of them.
+		if space := strings.IndexByte(excType, ' '); space >= 0 {
+			excType = excType[:space]
+		}
+		result.ExceptionType = excType
+		result.ExceptionMessage = message
 	} else {
-		result.ExceptionMessage = lines[0]
+		result.ExceptionMessage = head
 	}
 
-	if len(lines) > 1 {
-		result.ExceptionStackTrace = lines[1]
+	if hasStack {
+		result.ExceptionStackTrace = stack
 	}
 }

@@ -1,7 +1,7 @@
 // Package enrich extracts metadata from log lines: the timestamp, a
-// normalized severity, trace/span identifiers, structured-log fields
-// (message template, source context, service/version/product), Azure
-// resource metadata, and .NET-style exception details.
+// normalized severity, the message, trace/span identifiers, an HTTP status
+// code, structured-log fields (message template, source context,
+// service/version/product), Azure resource metadata, and exception details.
 //
 // # Parsing
 //
@@ -10,12 +10,14 @@
 //
 //  1. JSON: the line is decoded with a generated, allocation-light decoder
 //     that recognizes the common key spellings for each logical field
-//     (e.g. @t/@timestamp/timestamp/ts/time for the timestamp, Serilog's
-//     @l/@m/@mt/@x, Envoy's response_code/response_flags, Azure
-//     diagnostic-log envelopes with nested properties.log payloads, Docker
-//     json-file records, MongoDB structured logs, and Pino/Bunyan numeric
-//     levels).
-//  2. logfmt: a key/value scan picks up t/ts/time/timestamp, level, and
+//     (e.g. @t/@timestamp/timestamp/ts/time for the timestamp, @m/message/msg
+//     for the message, Serilog's @l/@mt/@x, Envoy's
+//     response_code/response_flags, Elastic Common Schema's dotted keys
+//     (log.level, trace.id, service.name, error.type, ...), OTLP-JSON's
+//     severityNumber/severityText, Azure diagnostic-log envelopes with nested
+//     properties.log payloads, Docker json-file records, MongoDB structured
+//     logs, and Pino/Bunyan numeric levels).
+//  2. logfmt: a key/value scan picks up t/ts/time/timestamp, level, msg, and
 //     trace correlation IDs (trace_id/span_id spellings and W3C
 //     traceparent).
 //  3. Pattern table: a list of regular expressions covering common plain-text
@@ -28,15 +30,33 @@
 // FormatPattern, or FormatNone), so callers can count enrichment hit rates
 // and debug unparsed lines.
 //
+// A timestamp that carries no zone offset is interpreted as UTC, and every
+// Result.Time is returned in UTC. Formats whose timestamp has no year (klog,
+// syslog RFC3164) infer it from the clock.
+//
 // # Severity
 //
 // Severities are normalized to trace, debug, info, warn, error, and fatal.
 // SeverityFromText maps any spelling in the wild to a canonical level and its
 // OpenTelemetry severity number; SeverityFromNumber is the inverse. HTTP
 // response codes and gRPC status codes map to severities when the line
-// carries no explicit level (see HTTPStatusSeverity and StatusKind). Syslog's
-// notice severity normalizes to info but keeps the finer-grained INFO2
-// severity number (Info2LevelNo).
+// carries no explicit level (see HTTPStatusSeverity and StatusKind).
+//
+// The OTLP severity numbers are finer-grained than the six level names, and
+// that grading is preserved where a source provides it: syslog's notice (and
+// the "notice" spelling) is an info with the Info2LevelNo number, its alert
+// and emergency are fatals with Fatal2LevelNo and Fatal3LevelNo. Severity and
+// SeverityNumber never contradict each other — SeverityFromNumber of the
+// number is always the level in Severity.
+//
+// # Trace identifiers
+//
+// TraceID and SpanID are only set from a value that is a whole identifier: 32
+// (16 for a span) hex digits, dashes permitted in a trace ID so that an Envoy
+// request_id UUID is accepted and de-dashed. A field that merely contains an
+// ID inside a longer sentence is not one, and neither is the all-zero ID that
+// W3C trace-context defines as invalid and OpenTelemetry SDKs emit for a
+// record with no active span.
 //
 // # Entry points
 //
@@ -53,6 +73,10 @@
 // safe, but the input stays reachable for as long as the result (or any
 // string taken from it) is. Copy the fields you need if you hold many
 // results and want the large input strings collected sooner.
+//
+// The exceptions are values the input does not contain verbatim: a JSON
+// string with escape sequences, an uppercase Azure resource ID (lowercased),
+// and a dashed trace ID (de-dashed) are copies.
 //
 // The package holds no mutable state and is safe for concurrent use. It never
 // logs: a line it cannot parse is reported through Result.Format (and a zero
