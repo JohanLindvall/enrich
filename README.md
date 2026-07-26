@@ -1,5 +1,10 @@
 # enrich
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/JohanLindvall/enrich.svg)](https://pkg.go.dev/github.com/JohanLindvall/enrich)
+[![CI](https://github.com/JohanLindvall/enrich/actions/workflows/ci.yml/badge.svg)](https://github.com/JohanLindvall/enrich/actions/workflows/ci.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/JohanLindvall/enrich)](https://goreportcard.com/report/github.com/JohanLindvall/enrich)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Extracts metadata from log lines in Go: timestamp, normalized severity, the
 message, trace/span IDs, HTTP status code, structured-log fields, Azure
 resource metadata, and exception details — from JSON, logfmt, and a wide range
@@ -192,3 +197,7 @@ timestamp formats (time only), grok ports like
 patterns you supply, and [go-logfmt](https://github.com/go-logfmt/logfmt) is
 a parsing primitive. The standard Go logging libraries (slog, zap, logrus,
 zerolog) are writers, not readers — none parse foreign logs.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
