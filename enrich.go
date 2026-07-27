@@ -253,7 +253,7 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 		switch string(key) {
 		case "t", "ts", "time", "timestamp":
 			if !tsFound {
-				if t, ok := logfmt.ParseTime(sval); ok {
+				if t, ok := logfmt.ParseTime(val); ok {
 					ts, tsFound = t, true
 				}
 			}

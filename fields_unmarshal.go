@@ -482,375 +482,807 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		if i >= len(data) {
 			return i, unstable.ErrTruncated
 		}
-		switch key {
-		case "@t", "@timestamp", "timestamp", "Timestamp", "ts", "time", "Time":
-			var lax time.Time
-			end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		switch len(key) {
+		case 1:
+			switch key {
+			case "t":
+				var lax mongoDate
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.MongoTime = lax
 				}
-			} else {
-				v.Time = lax
-			}
-			i = end
-		case "severity", "Severity", "severityText", "SeverityText", "log.level", "levelname", "@l", "@level", "level":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "s":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.MongoSeverity = lax
 				}
-			} else {
-				v.Severity = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "severityNumber", "severity_number":
-			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 2:
+			switch key {
+			case "@t", "ts":
+				var lax time.Time
+				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Time = lax
 				}
-			} else {
-				v.SeverityNumber = lax
-			}
-			i = end
-		case "@m", "message", "Message", "MESSAGE", "msg":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@l":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
 				}
-			} else {
-				v.Message = lax
-			}
-			i = end
-		case "traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id", "request_id":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@m":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Message = lax
 				}
-			} else {
-				v.TraceID = lax
-			}
-			i = end
-		case "spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@i":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.TemplateHash = lax
 				}
-			} else {
-				v.SpanID = lax
-			}
-			i = end
-		case "traceparent", "Traceparent", "TraceParent":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@x":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Exception = lax
 				}
-			} else {
-				v.Traceparent = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "sourcecontext", "sourceContext", "SourceContext", "logger", "loggerName", "logger_name":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 3:
+			switch key {
+			case "msg":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Message = lax
 				}
-			} else {
-				v.SourceContext = lax
-			}
-			i = end
-		case "@i":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@mt":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Template = lax
 				}
-			} else {
-				v.TemplateHash = lax
-			}
-			i = end
-		case "@mt":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@sv":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Version = lax
 				}
-			} else {
-				v.Template = lax
-			}
-			i = end
-		case "resourceID", "resourceId", "ResourceId", "resourceUri", "resourceURI":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@sn":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Service = lax
 				}
-			} else {
-				v.ResourceID = lax
-			}
-			i = end
-		case "eventCategory", "eventcategory", "EventCategory":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "@sp":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Product = lax
 				}
-			} else {
-				v.EventCategory = lax
-			}
-			i = end
-		case "@sv", "service.version":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "log":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Log = lax
 				}
-			} else {
-				v.Version = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "@sn", "service.name":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 4:
+			switch key {
+			case "time", "Time":
+				var lax time.Time
+				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Time = lax
 				}
-			} else {
-				v.Service = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "@sp":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 5:
+			switch key {
+			case "level":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
 				}
-			} else {
-				v.Product = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "@x", "exception":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 6:
+			switch key {
+			case "@level":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
 				}
-			} else {
-				v.Exception = lax
-			}
-			i = end
-		case "error.type", "exception.type":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "spanid", "spanId", "spanID", "SpanId", "SpanID":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SpanID = lax
 				}
-			} else {
-				v.ErrorType = lax
-			}
-			i = end
-		case "error.message", "exception.message":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "logger":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SourceContext = lax
 				}
-			} else {
-				v.ErrorMessage = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "error.stack_trace", "exception.stacktrace":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 7:
+			switch key {
+			case "message", "Message", "MESSAGE":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Message = lax
 				}
-			} else {
-				v.ErrorStack = lax
-			}
-			i = end
-		case "resultType":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "traceid", "traceId", "traceID", "TraceId", "TraceID":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.TraceID = lax
 				}
-			} else {
-				v.ResultType = lax
-			}
-			i = end
-		case "resultDescription":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "span_id", "span.id":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SpanID = lax
 				}
-			} else {
-				v.ResultDescription = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "log":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 8:
+			switch key {
+			case "severity", "Severity":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
 				}
-			} else {
-				v.Log = lax
-			}
-			i = end
-		case "t":
-			var lax mongoDate
-			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "trace_id", "trace.id":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.TraceID = lax
 				}
-			} else {
-				v.MongoTime = lax
-			}
-			i = end
-		case "s":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "protocol":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Protocol = lax
 				}
-			} else {
-				v.MongoSeverity = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "response_code", "responseCode", "status_code", "statusCode", "StatusCode", "http.response.status_code":
-			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 9:
+			switch key {
+			case "timestamp", "Timestamp":
+				var lax time.Time
+				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Time = lax
 				}
-			} else {
-				v.ResponseCode = lax
-			}
-			i = end
-		case "grpc_status_number":
-			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "log.level", "levelname":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
 				}
-			} else {
-				v.GrpcStatusNumber = lax
-			}
-			i = end
-		case "protocol":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "exception":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Exception = lax
 				}
-			} else {
-				v.Protocol = lax
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-		case "response_flags":
-			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+		case 10:
+			switch key {
+			case "@timestamp":
+				var lax time.Time
+				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Time = lax
 				}
-			} else {
-				v.ResponseFlags = lax
-			}
-			i = end
-		case "properties", "Properties":
-			var lax enrichProperties
-			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "request_id":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.TraceID = lax
 				}
-			} else {
-				v.Properties = lax
-			}
-			i = end
-		case "responseStatus", "ResponseStatus":
-			var lax enrichResponseStatus
-			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichResponseStatus(&lax, data, i)
-			if err != nil {
-				end, err = unstable.SkipValue(data, i)
+				i = end
+			case "loggerName":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
-					return end, err
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SourceContext = lax
 				}
-			} else {
-				v.ResponseStatus = lax
+				i = end
+			case "resourceID", "resourceId", "ResourceId":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResourceID = lax
+				}
+				i = end
+			case "error.type":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorType = lax
+				}
+				i = end
+			case "resultType":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResultType = lax
+				}
+				i = end
+			case "statusCode", "StatusCode":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseCode = lax
+				}
+				i = end
+			case "properties", "Properties":
+				var lax enrichProperties
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Properties = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
 			}
-			i = end
-
+		case 11:
+			switch key {
+			case "traceparent", "Traceparent", "TraceParent":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Traceparent = lax
+				}
+				i = end
+			case "logger_name":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SourceContext = lax
+				}
+				i = end
+			case "resourceUri", "resourceURI":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResourceID = lax
+				}
+				i = end
+			case "status_code":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseCode = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
+			}
+		case 12:
+			switch key {
+			case "severityText", "SeverityText":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Severity = lax
+				}
+				i = end
+			case "service.name":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Service = lax
+				}
+				i = end
+			case "responseCode":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseCode = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
+			}
+		case 13:
+			switch key {
+			case "sourcecontext", "sourceContext", "SourceContext":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SourceContext = lax
+				}
+				i = end
+			case "eventCategory", "eventcategory", "EventCategory":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.EventCategory = lax
+				}
+				i = end
+			case "error.message":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorMessage = lax
+				}
+				i = end
+			case "response_code":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseCode = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
+			}
+		case 14:
+			switch key {
+			case "severityNumber":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SeverityNumber = lax
+				}
+				i = end
+			case "exception.type":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorType = lax
+				}
+				i = end
+			case "response_flags":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseFlags = lax
+				}
+				i = end
+			case "responseStatus", "ResponseStatus":
+				var lax enrichResponseStatus
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichResponseStatus(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseStatus = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
+			}
+		case 15:
+			switch key {
+			case "severity_number":
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.SeverityNumber = lax
+				}
+				i = end
+			case "service.version":
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.Version = lax
+				}
+				i = end
+			default:
+				goto lightningSkipKey
+			}
+		case 17:
+			if key[0:16] == "exception.messag" && key[16:] == "e" {
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorMessage = lax
+				}
+				i = end
+			} else if key[0:16] == "error.stack_trac" && key[16:] == "e" {
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorStack = lax
+				}
+				i = end
+			} else if key[0:16] == "resultDescriptio" && key[16:] == "n" {
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResultDescription = lax
+				}
+				i = end
+			} else {
+				goto lightningSkipKey
+			}
+		case 18:
+			if key[0:16] == "grpc_status_numb" && key[16:] == "er" {
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.GrpcStatusNumber = lax
+				}
+				i = end
+			} else {
+				goto lightningSkipKey
+			}
+		case 20:
+			if key[0:16] == "exception.stackt" && key[16:] == "race" {
+				var lax string
+				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ErrorStack = lax
+				}
+				i = end
+			} else {
+				goto lightningSkipKey
+			}
+		case 25:
+			if key[0:16] == "http.response.st" && key[16:] == "atus_code" {
+				var lax json.Number
+				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				if err != nil {
+					end, err = unstable.SkipValue(data, i)
+					if err != nil {
+						return end, err
+					}
+				} else {
+					v.ResponseCode = lax
+				}
+				i = end
+			} else {
+				goto lightningSkipKey
+			}
 		default:
+			goto lightningSkipKey
+		}
+		goto lightningKeyDone
+	lightningSkipKey:
+		{
 			end, err := unstable.SkipValue(data, i)
 			if err != nil {
 				return end, err
 			}
 			i = end
 		}
+	lightningKeyDone:
 		if i < len(data) && data[i] <= ' ' {
 			i++
 			if i < len(data) && data[i] <= ' ' {
