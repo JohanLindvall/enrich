@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x19 \x0f \x15 \x18 \x1c \x00 \x02 \x02 \x1c \a \x18 \x18= 0 0 0  ")

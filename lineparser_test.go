@@ -141,7 +141,7 @@ func TestPosGatesNeverRejectMatches(t *testing.T) {
 		for _, line := range lines {
 			if clp.re.MatchString(line) {
 				var r Result
-				assert.True(t, clp.apply(&r, line), "gate rejected a matching line: re=%s line=%q", clp.re, line)
+				assert.True(t, clp.apply(&r, line, new(byteMemo)), "gate rejected a matching line: re=%s line=%q", clp.re, line)
 			}
 		}
 	}

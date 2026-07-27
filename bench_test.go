@@ -51,6 +51,16 @@ func BenchmarkParsePattern(b *testing.B) {
 	}
 }
 
+// An RFC3339-prefixed plain-text line with a level — the most common
+// non-JSON, non-logfmt shape in the wild (entry 58's family).
+var rfc3339Line = `2026-07-11T10:00:00.123456789Z error contacting upstream: connection refused`
+
+func BenchmarkParseRFC3339Line(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		sink = Parse(rfc3339Line)
+	}
+}
+
 // The hot-loop shape: one reused Result, no per-line allocation at all.
 func BenchmarkParseIntoReused(b *testing.B) {
 	var r Result

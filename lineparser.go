@@ -15,25 +15,29 @@ type lineParser struct {
 }
 
 type compiledLineParser struct {
-	contain string
-	first   string // bytes the line must start with; empty means no cheap test
-	rare    byte   // rarest byte of contain (0: none); gates the substring scan
-	req     byte   // a byte every regex match must contain (0: none)
-	quoted  bool   // pattern allows one leading '"', shifting the gates by one
-	gates   []posGate
-	re      *regexp.Regexp
-	names   []string // re.SubexpNames(), hoisted out of the per-line loop
-	ts      []string
+	contain     string
+	containByte byte   // contain when it is a single byte, for the memo
+	first       string // bytes the line must start with; empty means no cheap test
+	rare        byte   // rarest byte of contain (0: none); gates the substring scan
+	req         byte   // a byte every regex match must contain (0: none)
+	quoted      bool   // pattern allows one leading '"', shifting the gates by one
+	gates       []posGate
+	re          *regexp.Regexp
+	names       []string // re.SubexpNames(), hoisted out of the per-line loop
+	ts          []string
+	fastTS      func(string) (time.Time, bool)        // family parser for ts, or nil
+	fast        func(string) (fastSpans, fastVerdict) // hand matcher, or nil
 }
 
 // posGate is a fixed-position byte requirement derived from a pattern's
-// anchored timestamp prefix: a matching line must carry one of set's bytes at
-// idx. Two of these distinguish the timestamp families (slash vs dash date,
-// 'T' vs space separator) for a few byte compares, sparing the failing
-// patterns their full regex run.
+// anchored timestamp prefix: a matching line must carry want at idx. Two of
+// these distinguish the timestamp families (slash vs dash date, 'T' vs space
+// separator) for a few byte compares, sparing the failing patterns their full
+// regex run. want is a single byte — an IndexByte call over a one-byte set
+// used to cost more than the comparison it performed.
 type posGate struct {
-	idx int
-	set string
+	idx  int
+	want byte
 }
 
 var ymdSlashLayouts = []string{"2006/01/02 15:04:05.999999999"}
@@ -126,16 +130,32 @@ func init() {
 	for _, p := range lineParsers {
 		quoted, gates := posGates(p.re)
 		re := regexp.MustCompile(nonCapturing(p.re))
+		req := requiredByte(p.re)
+		for _, g := range gates {
+			if g.want == req {
+				// A passing gate already proves this byte is present; the
+				// req scan would re-derive it with a full IndexByte.
+				req = 0
+				break
+			}
+		}
+		var containByte byte
+		if len(p.contain) == 1 {
+			containByte = p.contain[0]
+		}
 		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
-			contain: p.contain,
-			first:   firstBytes(p.re),
-			rare:    rareByte(p.contain),
-			req:     requiredByte(p.re),
-			quoted:  quoted,
-			gates:   gates,
-			re:      re,
-			names:   re.SubexpNames(),
-			ts:      p.ts,
+			contain:     p.contain,
+			containByte: containByte,
+			first:       firstBytes(p.re),
+			rare:        rareByte(p.contain),
+			req:         req,
+			quoted:      quoted,
+			gates:       gates,
+			re:          re,
+			names:       re.SubexpNames(),
+			ts:          p.ts,
+			fastTS:      fastLayoutTime(p.ts),
+			fast:        fastMatcherFor(p.re),
 		})
 	}
 	for b := 0; b < 256; b++ {
@@ -197,11 +217,11 @@ func posGates(re string) (quoted bool, gates []posGate) {
 	}
 	switch {
 	case strings.HasPrefix(re, `^(?P<time>\d{4}/\d{2}/\d{2} `):
-		return quoted, []posGate{{4, "/"}, {10, " "}}
+		return quoted, []posGate{{4, '/'}, {10, ' '}}
 	case strings.HasPrefix(re, `^(?P<time>\d{4}-\d{2}-\d{2}T`):
-		return quoted, []posGate{{4, "-"}, {10, "T"}}
+		return quoted, []posGate{{4, '-'}, {10, 'T'}}
 	case strings.HasPrefix(re, `^(?P<time>\d{4}-\d{2}-\d{2} `):
-		return quoted, []posGate{{4, "-"}, {10, " "}}
+		return quoted, []posGate{{4, '-'}, {10, ' '}}
 	}
 	return false, nil
 }
@@ -324,21 +344,47 @@ func firstBytes(re string) string {
 }
 
 // apply matches the parser against message and, on a match, fills result from
-// the named submatches. It reports whether the parser matched.
-func (clp *compiledLineParser) apply(result *Result, message string) bool {
+// the named submatches. It reports whether the parser matched. memo dedupes
+// whole-line byte scans across entries (and the traceparent gate).
+func (clp *compiledLineParser) apply(result *Result, message string, memo *byteMemo) bool {
+	// Positional gates first: two inline byte compares reject a wrong-family
+	// line more cheaply than even the hand matcher's call. A gate may only
+	// reject lines the regex rejects, so running it before the matcher cannot
+	// change the verdict.
 	if len(clp.gates) > 0 {
 		off := 0
 		if clp.quoted && len(message) > 0 && message[0] == '"' {
 			off = 1
 		}
 		for _, g := range clp.gates {
-			if i := g.idx + off; i >= len(message) || strings.IndexByte(g.set, message[i]) < 0 {
+			if i := g.idx + off; i >= len(message) || message[i] != g.want {
 				return false
 			}
 		}
 	}
-	if clp.contain != "" {
-		if clp.rare != 0 && strings.IndexByte(message, clp.rare) < 0 {
+	if clp.fast != nil {
+		switch spans, v := clp.fast(message); v {
+		case fastNoMatch:
+			return false
+		case fastMatched:
+			// The matcher proves the regex outcome for these entries: apply
+			// the captures in group order (time before level, as the regexes
+			// declare them) and skip contain, req and the regex itself.
+			if spans.time[1] > spans.time[0] {
+				clp.applySubmatch(result, "time", message[spans.time[0]:spans.time[1]])
+			}
+			if spans.level[1] > spans.level[0] {
+				clp.applySubmatch(result, "level", message[spans.level[0]:spans.level[1]])
+			}
+			return true
+		}
+	}
+	if clp.containByte != 0 {
+		if !memo.has(message, clp.containByte) {
+			return false
+		}
+	} else if clp.contain != "" {
+		if clp.rare != 0 && !memo.has(message, clp.rare) {
 			return false
 		}
 		if !strings.Contains(message, clp.contain) {
@@ -346,7 +392,7 @@ func (clp *compiledLineParser) apply(result *Result, message string) bool {
 		}
 	}
 
-	if clp.req != 0 && strings.IndexByte(message, clp.req) < 0 {
+	if clp.req != 0 && !memo.has(message, clp.req) {
 		return false
 	}
 
@@ -386,8 +432,20 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 		}
 		switch name {
 		case "ktime":
+			// The direct parse skips expandKlogTime's year-prefix allocation
+			// and the layout loop; unclaimed shapes take the old path below.
+			if ts, ok := parseKlogTime(value, time.Now().UTC()); ok {
+				result.Time = ts
+				return
+			}
 			value = expandKlogTime(value, time.Now().UTC())
 		case "stamptime":
+			// As for klog: parse directly, fall back to the year-prefix path
+			// for unclaimed shapes.
+			if ts, ok := parseStampTime(value, time.Now().UTC()); ok {
+				result.Time = ts
+				return
+			}
 			value = expandStampTime(value, time.Now().UTC())
 		}
 		// A layout that does not parse simply leaves Time zero; the caller
@@ -427,8 +485,17 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 }
 
 // parseLayoutTime tries the parser's layouts in order and returns the first
-// successfully parsed timestamp, in UTC.
+// successfully parsed timestamp, in UTC. The hand-rolled family parser, when
+// one covers this layout list, decides the canonical shapes without
+// re-tokenizing a layout; a shape it does not claim falls through to the
+// loop, so the fast path can only ever change speed, not outcome
+// (timeparse_test.go holds it to that).
 func (clp *compiledLineParser) parseLayoutTime(ts string) (time.Time, bool) {
+	if clp.fastTS != nil {
+		if t, ok := clp.fastTS(ts); ok {
+			return t, true
+		}
+	}
 	for _, layout := range clp.ts {
 		// Skip a layout that cannot match: only RFC3339Nano carries a
 		// 'T' date/time separator at index 10, so a 'T'-vs-space

@@ -1,8 +1,10 @@
 package enrich
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
+	"unsafe"
 )
 
 // The six normalized severity levels. Parse reports one of these in
@@ -67,6 +69,73 @@ var severityLUT = map[string]struct {
 
 const maxSeverityKey = len("informational")
 
+// sevTable is severityLUT rebuilt as a perfect-hash array: sevHash is injective
+// over the LUT's keys (init verifies that and panics with replacement constants
+// if a new spelling ever collides), so a lookup is one multiply-mix, one slot
+// load and one string compare — no map hashing. On the Azure benchmark the
+// map's aeshash+access was ~8% of the whole parse; this is the same lookup for
+// a fraction of that. The map stays as the authoritative registry (init and the
+// severity tests iterate it); only the lookup bypasses it.
+type sevSlot struct {
+	key  string
+	text string
+	no   int
+}
+
+const (
+	sevHashLen   = 3
+	sevHashFirst = 43
+	sevHashLast  = 5
+	sevTableSize = 128 // power of two; 42 keys leave plenty of slack
+)
+
+var sevTable [sevTableSize]sevSlot
+
+// sevHash mixes the three bytes that distinguish every LUT key: length, first
+// and last byte. s must be non-empty and lowercased.
+func sevHash(s string) uint32 {
+	return (uint32(len(s))*sevHashLen + uint32(s[0])*sevHashFirst + uint32(s[len(s)-1])*sevHashLast) % sevTableSize
+}
+
+// buildSevTable fills sevTable from severityLUT, panicking on a hash collision.
+// The panic message includes freshly searched constants that do work, so a
+// maintainer adding a colliding spelling just copies them in.
+func buildSevTable() {
+	for key, v := range severityLUT {
+		slot := &sevTable[sevHash(key)]
+		if slot.key != "" {
+			panic(fmt.Sprintf("enrich: severity spellings %q and %q collide in sevTable; use %s",
+				slot.key, key, searchSevHash()))
+		}
+		*slot = sevSlot{key: key, text: v.text, no: v.no}
+	}
+}
+
+// searchSevHash looks for mixer constants that are injective over the current
+// severityLUT keys, for buildSevTable's collision panic. It only ever runs on
+// that panic path.
+func searchSevHash() string {
+	for _, size := range []uint32{64, 128, 256} {
+		for a := uint32(1); a < 64; a++ {
+			for b := uint32(1); b < 64; b++ {
+			next:
+				for c := uint32(1); c < 8; c++ {
+					seen := make(map[uint32]bool, len(severityLUT))
+					for k := range severityLUT {
+						h := (uint32(len(k))*a + uint32(k[0])*b + uint32(k[len(k)-1])*c) % size
+						if seen[h] {
+							continue next
+						}
+						seen[h] = true
+					}
+					return fmt.Sprintf("sevHashLen=%d sevHashFirst=%d sevHashLast=%d sevTableSize=%d", a, b, c, size)
+				}
+			}
+		}
+	}
+	return "no constants found; widen the search in searchSevHash"
+}
+
 func init() {
 	add := func(text string, no int, forms ...string) {
 		for _, f := range forms {
@@ -96,15 +165,28 @@ func init() {
 	add(ErrorLevel, ErrorLevelNo, "severe")         // java.util.logging
 	add(DebugLevel, DebugLevelNo, "fine")
 	add(TraceLevel, TraceLevelNo, "finer", "finest")
+
+	buildSevTable()
 }
 
 // severityInitials are the first letters of every entry in severityLUT. A
 // single byte test rejects the overwhelming majority of non-levels (any word
 // the pattern table happened to capture as a level) before hashing anything.
+// The lookup tests severityInitialMask, its bitmask form — one shift-and-mask
+// instead of an IndexByte call.
 const severityInitials = "tdinlwefcpavs"
 
+var severityInitialMask uint32
+
+func init() {
+	for i := 0; i < len(severityInitials); i++ {
+		severityInitialMask |= 1 << (severityInitials[i] - 'a')
+	}
+}
+
 // lookupSeverity does the case-insensitive LUT lookup without allocating: the
-// lowercased key is built on the stack.
+// lowercased key is built on the stack and probed against the perfect-hash
+// sevTable (see buildSevTable).
 func lookupSeverity(s string) (string, int, bool) {
 	if len(s) == 0 || len(s) > maxSeverityKey {
 		return "", 0, false
@@ -117,8 +199,13 @@ func lookupSeverity(s string) (string, int, bool) {
 		}
 		buf[i] = c
 	}
-	v, ok := severityLUT[string(buf[:len(s)])]
-	return v.text, v.no, ok
+	// buf is stack memory that outlives the view, and the view never escapes.
+	key := unsafe.String(&buf[0], len(s))
+	slot := &sevTable[sevHash(key)]
+	if slot.key != key {
+		return "", 0, false
+	}
+	return slot.text, slot.no, true
 }
 
 // SeverityFromText normalizes any of the level spellings that appear in the
@@ -126,13 +213,32 @@ func lookupSeverity(s string) (string, int, bool) {
 // levels and its OpenTelemetry severity number. It returns "", 0 for a string
 // that names no level. It is the inverse of SeverityFromNumber.
 func SeverityFromText(input string) (string, int) {
-	if input == "" {
+	// The canonical spellings dominate at runtime: ParseInto's final
+	// normalization mostly re-normalizes text a parser already canonicalized.
+	// The switch compiles to a length dispatch plus a couple of wide
+	// compares — no lowercase pass, no hash. Each case returns exactly what
+	// the LUT holds for that key, which the differential sweep pins.
+	switch input {
+	case "":
 		return "", 0
+	case TraceLevel:
+		return TraceLevel, TraceLevelNo
+	case DebugLevel:
+		return DebugLevel, DebugLevelNo
+	case InfoLevel:
+		return InfoLevel, InfoLevelNo
+	case WarnLevel:
+		return WarnLevel, WarnLevelNo
+	case ErrorLevel:
+		return ErrorLevel, ErrorLevelNo
+	case FatalLevel:
+		return FatalLevel, FatalLevelNo
 	}
-	// No level begins with any other letter, so one byte test rejects most
+	// No level begins with any other letter, so one bit test rejects most
 	// non-levels outright. (|0x20 lowercases ASCII letters; every other byte,
-	// including the lead byte of a multi-byte rune, maps outside the set.)
-	if strings.IndexByte(severityInitials, input[0]|0x20) < 0 {
+	// including the lead byte of a multi-byte rune, maps outside a-z and
+	// fails the range check.)
+	if c := input[0] | 0x20; c-'a' > 'z'-'a' || severityInitialMask&(1<<(c-'a')) == 0 {
 		return "", 0
 	}
 

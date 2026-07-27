@@ -35,7 +35,36 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   oracle, and a 500k-input randomized differential test pins the table to
   them — extend the table and that test together, **including
   `severityInitials`** (the one-byte prefilter: a spelling whose first letter
-  is missing there is never looked up) and the sweep's alphabet.
+  is missing there is never looked up) and the sweep's alphabet. The map is
+  the registry only: lookups go through `sevTable`, a perfect-hash array
+  built from it in init — a new spelling that collides makes init panic with
+  freshly searched replacement constants to paste in, so the two cannot
+  drift.
+- `hex.go` — SWAR byte-classification helpers (`le64`, `laneRange`, `hex8`,
+  `hexRun`) behind `validTraceID`/`validSpanID`/`validGUID` and the ASCII
+  fast path of `lower`. Every formula is exact per lane (no cross-lane
+  borrow), unlike the find-first-stop masks in the logfmt package;
+  `hex_test.go` pins them to the per-byte originals.
+- `timeparse.go` — per-layout-family timestamp parsers (the sanctioned
+  replacement for `time.Parse`, which fast-paths only the literal
+  RFC3339/RFC3339Nano layout constants and re-tokenizes every other layout
+  per call). Contract: a parser may return `!ok` freely — the caller falls
+  back to the old `time.Parse` path, so a miss cannot change behavior — but a
+  claim must be byte-identical to what the family's layout loop produces.
+  `timeparse_test.go` differential-tests each family against its own layouts
+  *and* asserts the canonical shapes are claimed, so a fast path can neither
+  drift nor silently rot into always-missing. `parseGoStringTime` (the Go
+  `time.Time.String()` shape browser-telemetry logfmt carries) fronts
+  `logfmt.ParseTime` the same way.
+- `fastmatch.go` — hand matchers for the hottest pattern-table entries and
+  the per-line `byteMemo`. A matcher returns a proven
+  `fastNoMatch`/`fastMatched` (with capture spans) or `fastUndecided`, which
+  falls through to the regex; `fastMatcherFor` keys matchers on the *exact*
+  pattern string, so editing an entry detaches its matcher instead of
+  desynchronizing it. `fastmatch_test.go` pins every matcher to its regex
+  over the fuzz corpus plus mutation sweeps — extend it when adding one. The
+  memo dedupes whole-line `IndexByte` gate scans (each distinct byte scanned
+  at most once per line) and is plain stack state, not a cache.
 - `testdata/fuzz/FuzzParse/` — the corpus the fuzzer accumulated. `go test`
   replays every entry as a seed, so it is a regression suite; add to it by
   running the fuzzer and copying new finds out of `$(go env GOCACHE)/fuzz`.
@@ -101,6 +130,14 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
 - **`ParseInto` must fully reset the Result** (`*result = Result{Body: input}`)
   — callers reuse one across lines, so any field left behind leaks into the
   next line. Guarded by TestParseInto_ResetsResult.
+- **Every fast path is claim-or-fallback, pinned to an oracle.** The family
+  timestamp parsers, the hand matchers, `scanTraceparent`, `lower`, the SWAR
+  ID validators, `validGUID` and `jsonInt` each shadow a slower
+  implementation that remains the oracle in a differential test
+  (`timeparse_test.go`, `fastmatch_test.go`, `hex_test.go`, `micro_test.go`).
+  A fast path may decline an input — the slow path then decides — but a
+  claimed answer must be byte-identical to the oracle's. When you touch one,
+  extend its differential test in the same commit; never delete an oracle.
 - **Test data is anonymized.** Log lines in tests use example.com/acme/base
   names, TEST-NET IPs (203.0.113.x), and all-zero dummy GUIDs. Keep it that
   way: never paste raw production log lines into tests — scrub domains,
@@ -129,12 +166,17 @@ lightning's `nocopy`/`lax` tag options as unknown. Don't widen the exclusion.
 
 `Parse` is on a hot path (one call per log line). Current numbers
 (Ryzen 7 8840HS, amd64), with the result escaping as it does for a real
-caller: ~490 ns / 1 alloc for a ~900 B JSON line, ~750 ns / 1 alloc for a
-~1.9 kB logfmt line, ~700 ns / 2 allocs for a pattern-table line, ~900 ns /
-2 allocs for an Azure record with a nested `properties.log`, ~226 ns /
-1 alloc for a 1 kB line that matches nothing. **That single alloc is the
-352 B `Result` itself** — `ParseInto` with a reused `Result` is fully
-zero-allocation (~365 ns), and is what a per-line pipeline should call.
+caller: ~465 ns / 1 alloc for a ~900 B JSON line, ~570 ns / 1 alloc for a
+~1.9 kB logfmt line, ~232 ns / 1 alloc for a pattern-table line (Go-log or
+RFC3339 shape alike), ~705 ns / 2 allocs for an Azure record with a nested
+`properties.log`, ~197 ns / 1 alloc for a 1 kB line that matches nothing.
+**That single alloc is the 352 B `Result` itself** — `ParseInto` with a
+reused `Result` is fully zero-allocation (~327 ns), and is what a per-line
+pipeline should call. (Same-machine-state deltas of the 2026-07 optimization
+pass, measured interleaved: JSON −7%, logfmt −19%, pattern −67%, Azure −25%,
+miss −14%, geomean −24%. Benchmark A/B on this laptop is only meaningful
+interleaved on one machine state — the absolute numbers drift ~10% with
+thermals.)
 
 **Adding a field to `Result` or `enrichFields` costs real time; adding a key
 spelling to an existing field does not.** Measured: the ~20 extra aliases
@@ -157,10 +199,15 @@ trace ID, and the `[]int` of a pattern-table match.
 - **Never `string(val)` inside the logfmt callback.** The bytes alias the
   input and the input is immutable, so `unsafe.String` is free; a conversion
   copies the value on every line.
-- The pattern path's one remaining alloc is the `[]int` that
-  `FindStringSubmatchIndex` returns; its size scales with the capture-group
-  count, which is why `nonCapturing` rewrites every unnamed group to `(?:`.
-  Keep new table entries free of unnamed capturing groups.
+- A pattern-path entry only allocates when its regex actually runs: the
+  `[]int` that `FindStringSubmatchIndex` returns scales with the
+  capture-group count, which is why `nonCapturing` rewrites every unnamed
+  group to `(?:`. Five of the six hand-matched entries (fastmatch.go) skip
+  the regex and the alloc entirely on their shapes; the redis matcher only
+  pre-decides the miss side, so genuine redis lines still run their regex.
+  Entries without a matcher always pay it, so keep new table entries free of
+  unnamed capturing groups — and consider a matcher for a shape that will be
+  hot.
 - Trace/span IDs are validated by hand (`validTraceID`/`validSpanID`), not by
   regex — the old regexes cost ~40% of the JSON path on a line carrying a
   request_id. Same reasoning retired `resourceGroupRE`.
@@ -173,22 +220,23 @@ either a `firstBytes` classifier match or a `contain` substring pre-filter
 (see the lineparser.go note above) — the miss path regressed 9x without them.
 
 Parse's own overhead is now small: profiling the JSON and logfmt paths shows
-the time going to `logfmt.Iterate` (~41%) and the generated lightning decoder
-(~33%), both of which are already SIMD-optimized. Gating works — only **1-2
-regexes actually execute** per line, and a miss executes none.
+the time going to `logfmt.Iterate` and the generated lightning decoder, both
+of which are already SIMD-optimized (they are ~65-75% of those paths — the
+next real wins live in those modules, not here). Gating works: the common
+plain-text shapes execute **zero** regexes (hand matchers decide them), other
+lines 1-2, and a miss executes none.
 
 ## Rejected optimizations (measured; do not re-attempt without new evidence)
 
-- **Hand-rolled numeric timestamp parser** to replace `time.Parse` (which
-  re-tokenizes its layout on every call — `time.nextStdChunk` is ~5%). Worth
-  ~11% of the pattern path, but a differential test against `time.Parse`
-  immediately showed the hand-rolled version accepting shapes the layouts
+- **One generic hand-rolled timestamp parser** to replace `time.Parse`. A
+  differential test immediately showed it accepting shapes the layouts
   reject (`2026/07/06T12:00:00`, slash dates with zone offsets, 6-digit
-  fractions against a `.000` layout). Nothing captures those shapes *today*,
-  so it passed the suite — which is exactly the danger: correctness would
-  silently depend on the pattern table never gaining such an entry. If this is
-  ever revisited, write one parser **per layout family** and differential-test
-  each against its own layouts, rather than one generic parser.
+  fractions against a `.000` layout) — it passed the suite only because
+  nothing captures those shapes *today*, which is exactly the danger. What
+  ultimately landed (timeparse.go) is the remedy that note prescribed: one
+  parser **per layout family**, each free to fall back to `time.Parse`, each
+  differential-tested against its own layouts. Keep that discipline; do not
+  collapse the families back into one parser.
 - **Early-exit for `enrichFromLogFmt`.** It scans every line to the end because
   it cannot know that no `trace_id` is coming, and almost no line carries one.
   Pre-scanning with `strings.Contains` for "level="/"race"/"pan" to prove

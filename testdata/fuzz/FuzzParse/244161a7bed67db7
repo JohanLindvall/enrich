@@ -1,0 +1,2 @@
+go test fuzz v1
+string("ↁ똆\ue2d1먞\uf046弑-沁:=[\n0\ue43f000000000000♈0药")

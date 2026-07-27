@@ -1,0 +1,2 @@
+go test fuzz v1
+string("=\a =\x0f =\x02 =\x1c =\x13 =\x14 =\x12 =\x040000000")

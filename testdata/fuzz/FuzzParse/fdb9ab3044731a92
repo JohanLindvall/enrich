@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\x14 \x1e \x1e = \x02 \x19 \x11 \a \x04 \x19 \x01 \x1b \x12 0 0 0  ")

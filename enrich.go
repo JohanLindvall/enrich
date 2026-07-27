@@ -31,6 +31,13 @@ func validTraceID(s string) bool {
 	if len(s) < 32 || len(s) > 36 {
 		return false
 	}
+	if len(s) == 32 {
+		// The dominant shape: 32 bare hex digits, decided a word at a time. A
+		// dash would make the digit count fall short, so hex-and-not-all-zero
+		// is the whole predicate here.
+		isHex, isZero := hexRun(s, 0, 32)
+		return isHex && !isZero
+	}
 	hex, zeros := 0, 0
 	for i := 0; i < len(s); i++ {
 		switch c := s[i]; {
@@ -52,19 +59,54 @@ func validSpanID(s string) bool {
 	if len(s) != 16 {
 		return false
 	}
-	zeros := 0
-	for i := 0; i < len(s); i++ {
-		if !isHex(s[i]) {
-			return false
-		}
-		if s[i] == '0' {
-			zeros++
-		}
-	}
-	return zeros != 16
+	isHex, isZero := hexRun(s, 0, 16)
+	return isHex && !isZero
 }
 
-var traceparentRE = regexp.MustCompile(`^traceparent[:=]\s*"?([0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2})`)
+// lowHex reports whether c is a lowercase ASCII hex digit — the alphabet the
+// W3C traceparent grammar (and the regex scanTraceparent replaced) allows.
+func lowHex(c byte) bool {
+	return c-'0' <= 9 || c-'a' <= 5
+}
+
+// scanTraceparent extracts the trace/span IDs from rest, the text following a
+// "traceparent" occurrence: "[:=]", optional regexp-\s whitespace, an optional
+// opening quote, then the 55-byte version-traceid-spanid-flags value in
+// lowercase hex. It is the hand-scan replacement for the anchored regex this
+// package used here (kept as the oracle in enrich_test.go, the same pattern
+// as resourceGroup): the regex allocated its submatch slice on every hit, per
+// line on fleets that propagate W3C trace context. parseTraceparent supplies
+// the structural offsets and the all-zero rejection; the lowercase check is
+// what the regex's [0-9a-f] added on top of it.
+func scanTraceparent(rest string) (traceID, spanID string) {
+	if len(rest) == 0 || (rest[0] != ':' && rest[0] != '=') {
+		return "", ""
+	}
+	i := 1
+	for i < len(rest) && isSpaceRE(rest[i]) {
+		i++
+	}
+	if i < len(rest) && rest[i] == '"' {
+		i++
+	}
+	if i+55 > len(rest) {
+		return "", ""
+	}
+	v := rest[i : i+55]
+	for j := 0; j < 55; j++ {
+		switch j {
+		case 2, 35, 52:
+			if v[j] != '-' {
+				return "", ""
+			}
+		default:
+			if !lowHex(v[j]) {
+				return "", ""
+			}
+		}
+	}
+	return parseTraceparent(v)
+}
 
 // resourceGroup extracts the "/subscriptions/<guid>/resourcegroups/<name>"
 // prefix of an Azure resource ID — the scope a caller groups by — and returns
@@ -107,8 +149,21 @@ func resourceGroup(id string) string {
 	}
 }
 
-// validGUID reports whether s is a dashed GUID: 8-4-4-4-12 hex digits.
+// validGUID reports whether s is a dashed GUID: 8-4-4-4-12 hex digits. The
+// 36-byte shape (the only one resourceGroup asks about) is decided a word at
+// a time: the dashes are checked directly, then XORed onto '0' ('-'^0x1d)
+// so the whole word can take the one hex8 test.
 func validGUID(s string) bool {
+	if len(s) == 36 {
+		const dash0and5 = uint64(0x1d) | uint64(0x1d)<<40     // bytes 8 and 13
+		const dash2and7 = uint64(0x1d)<<16 | uint64(0x1d)<<56 // bytes 18 and 23
+		return s[8] == '-' && s[13] == '-' && s[18] == '-' && s[23] == '-' &&
+			hex8(le64(s, 0)) &&
+			hex8(le64(s, 8)^dash0and5) &&
+			hex8(le64(s, 16)^dash2and7) &&
+			hex8(le64(s, 24)) &&
+			hex8(le64(s, 28))
+	}
 	for i := 0; i < len(s); i++ {
 		switch i {
 		case 8, 13, 18, 23:
@@ -207,6 +262,24 @@ func removeDashesASCII(s string) string {
 	return string(b)
 }
 
+// logfmtKeyStart marks the first bytes of the keys enrichFromLogFmt's switch
+// inspects (t/ts/time/timestamp, level, msg/message, the trace/span/
+// traceparent spellings), both cases. Built in init from the actual case
+// lists so it cannot drift from the switch. A key starting with any other
+// byte is rejected with one load.
+var logfmtKeyStart [256]bool
+
+func init() {
+	for _, k := range []string{
+		"t", "ts", "time", "timestamp", "level", "msg", "message",
+		"traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id",
+		"spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id",
+		"traceparent",
+	} {
+		logfmtKeyStart[k[0]] = true
+	}
+}
+
 // parseTraceparent splits a W3C traceparent value
 // (version-traceid-spanid-flags, e.g. "00-4bf9...4736-00f0...02b7-01") into
 // its trace and span IDs, returning empty strings if the value is malformed.
@@ -233,8 +306,8 @@ func parseTraceparent(v string) (traceID, spanID string) {
 // The first parseable timestamp wins. For the level, a value that normalizes to a
 // known severity wins over an earlier non-normalizing one (e.g. the inner
 // "level=a@1 level=info" keeps "info").
-func (result *Result) enrichFromLogFmt(message string) bool {
-	if strings.IndexByte(message, '=') < 0 {
+func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
+	if !memo.has(message, '=') {
 		return false
 	}
 
@@ -245,6 +318,13 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 	// message is immutable; alias its bytes rather than copying.
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
 	_ = logfmt.Iterate(buf, func(key, val []byte) bool {
+		// Every key the switch below knows starts with one of t/l/m/s (either
+		// case); one table load rejects the rest before the length-dispatched
+		// switch runs. A browser-telemetry line carries dozens of
+		// event_data_* keys per interesting one.
+		if len(key) == 0 || !logfmtKeyStart[key[0]] {
+			return true
+		}
 		// val aliases message (or, for a bare key, a constant): both are
 		// immutable, so a string view costs nothing and copies nothing.
 		// Anything kept in the result therefore aliases the input, exactly
@@ -253,7 +333,14 @@ func (result *Result) enrichFromLogFmt(message string) bool {
 		switch string(key) {
 		case "t", "ts", "time", "timestamp":
 			if !tsFound {
-				if t, ok := logfmt.ParseTime(val); ok {
+				// The Go time.Time String() shape first — the common browser-
+				// telemetry timestamp, which logfmt.ParseTime can only reach
+				// through a full time.Parse. A shape the fast path does not
+				// claim (epoch, RFC3339, exotic zone names) goes to ParseTime
+				// as before.
+				if t, ok := parseGoStringTime(val); ok {
+					ts, tsFound = t, true
+				} else if t, ok := logfmt.ParseTime(val); ok {
 					ts, tsFound = t, true
 				}
 			}
@@ -355,10 +442,15 @@ func ParseInto(input string, result *Result) bool {
 	// line that is not JSON, which is most of them.
 	if looksLikeJSONObject(message) && result.enrichFromJSON(message) {
 		result.Format = FormatJSON
-	} else if result.enrichFromLogFmt(message) {
-		result.Format = FormatLogfmt
-	} else if result.enrichFromPatterns(message) {
-		result.Format = FormatPattern
+	} else {
+		// The memo lives across the logfmt scan and the pattern table, so a
+		// byte one gate scanned for ('=' most of all) is never scanned again.
+		var memo byteMemo
+		if result.enrichFromLogFmt(message, &memo) {
+			result.Format = FormatLogfmt
+		} else if result.enrichFromPatterns(message, &memo) {
+			result.Format = FormatPattern
+		}
 	}
 
 	// Normalize the severity text, and keep a finer-grained severity number
@@ -487,6 +579,24 @@ func (result *Result) applyProperties(p *enrichProperties) json.Number {
 func jsonInt(n json.Number) (int64, bool) {
 	if n == "" {
 		return 0, false
+	}
+	// Nearly every code reaching this is a few plain digits; up to 18 of them
+	// cannot overflow int64, so ParseInt's sign/base/cutoff bookkeeping is
+	// only needed for the shapes the loop rejects (signs, floats, exponents,
+	// 19+ digits), which keep the stdlib behavior verbatim.
+	if len(n) <= 18 {
+		var v int64
+		i := 0
+		for ; i < len(n); i++ {
+			c := n[i] - '0'
+			if c > 9 {
+				break
+			}
+			v = v*10 + int64(c)
+		}
+		if i == len(n) {
+			return v, true
+		}
 	}
 	v, err := strconv.ParseInt(string(n), 10, 64)
 	return v, err == nil
@@ -619,16 +729,47 @@ func (result *Result) applyMetadata(f *enrichFields) {
 	setIfSet(&result.ExceptionStackTrace, f.ErrorStack)
 }
 
-// lower is strings.ToLower without its unconditional allocation: an Azure
-// resource ID that is already lowercase (many are) is returned as is, aliasing
-// the input like every other extracted field.
+// lower is strings.ToLower minus its unconditional allocation and its byte-at-
+// a-time loop: an Azure resource ID that is already lowercase (many are) is
+// returned as is, aliasing the input like every other extracted field, and an
+// uppercase one — the benchmark shape, where ToLower's two passes plus copy
+// were ~13% of the Azure parse — is case-flipped eight bytes at a time. Any
+// non-ASCII byte defers to strings.ToLower, which is also the oracle lower is
+// differential-tested against (TestLowerMatchesToLower).
 func lower(s string) string {
-	for i := 0; i < len(s); i++ {
+	i := 0
+	for ; i < len(s); i++ {
 		if c := s[i]; 'A' <= c && c <= 'Z' || c >= utf8.RuneSelf {
-			return strings.ToLower(s)
+			break
 		}
 	}
-	return s
+	if i == len(s) {
+		return s
+	}
+	b := make([]byte, len(s))
+	copy(b, s[:i])
+	for ; i+8 <= len(s); i += 8 {
+		w := le64(s, i)
+		if w&swarHigh != 0 {
+			return strings.ToLower(s) // non-ASCII: rune-aware lowering
+		}
+		// laneRange marks the A-Z lanes with 0x80; shifted to the 0x20 case
+		// bit, the XOR flips exactly those bytes to lowercase.
+		putLE64(b, i, w^(laneRange(w, 'A', 'Z')>>2))
+	}
+	for ; i < len(s); i++ {
+		c := s[i]
+		if c >= utf8.RuneSelf {
+			return strings.ToLower(s)
+		}
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	// b is freshly heap-allocated and never written again, so the view is as
+	// immutable as any string.
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 // applyResponseCode maps HTTP-ish status information to a severity: first an
@@ -672,29 +813,28 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Numbe
 // compiled line-parser table (nginx, klog, redis, tracebacks, ...) and
 // reports whether any entry matched. A W3C traceparent anywhere in the line
 // is extracted independently of the table.
-func (result *Result) enrichFromPatterns(message string) bool {
+func (result *Result) enrichFromPatterns(message string, memo *byteMemo) bool {
 	matched := false
 	if message != "" {
 		// One index picks the parsers this line's first byte can start, in
 		// table (priority) order; the rest never run.
 		for _, clp := range parsersByFirstByte[message[0]] {
-			if clp.apply(result, message) {
+			if clp.apply(result, message, memo) {
 				matched = true
 				break
 			}
 		}
 	}
 
-	// traceparentRE requires "traceparent[:=]", so a line with neither ':'
-	// nor '=' cannot match; both probes are SIMD byte scans, far cheaper than
-	// the substring search on lines full of 't's.
-	if strings.IndexByte(message, '=') >= 0 || strings.IndexByte(message, ':') >= 0 {
+	// scanTraceparent requires "traceparent[:=]", so a line with neither ':'
+	// nor '=' cannot match; both probes are memoized SIMD byte scans, far
+	// cheaper than the substring search on lines full of 't's. Like the regex
+	// it replaced, the scan gets one attempt, at the first occurrence.
+	if memo.has(message, '=') || memo.has(message, ':') {
 		if i := strings.Index(message, "traceparent"); i >= 0 {
-			if m := traceparentRE.FindStringSubmatch(message[i:]); m != nil {
-				if t, s := parseTraceparent(m[1]); t != "" {
-					result.TraceID, result.SpanID = t, s
-					matched = true
-				}
+			if t, s := scanTraceparent(message[i+len("traceparent"):]); t != "" {
+				result.TraceID, result.SpanID = t, s
+				matched = true
 			}
 		}
 	}

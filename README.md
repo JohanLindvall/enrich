@@ -135,19 +135,22 @@ patch version on every green main build.
 go test -run='^$' -bench=. -benchmem .
 ```
 
-On a Ryzen 7 8840HS (amd64): ~490 ns to enrich a ~900 B JSON Envoy
-access-log line, ~750 ns for a ~1.9 kB logfmt line, ~700 ns for a plain-text
-line resolved by the pattern table, ~900 ns for an Azure diagnostic record
-with a nested `properties.log` payload, and ~226 ns for a 1 kB line that
-matches nothing (the table is skipped almost entirely via first-byte dispatch,
-positional gates, and substring prefilters).
+On a Ryzen 7 8840HS (amd64): ~465 ns to enrich a ~900 B JSON Envoy
+access-log line, ~570 ns for a ~1.9 kB logfmt line, ~232 ns for a plain-text
+line resolved by the pattern table (the common Go-log and RFC3339 shapes are
+decided by hand-written matchers, with no regex run; their timestamps parse
+via per-layout hand parsers or the stdlib's dedicated RFC3339 fast path, so
+no layout string is ever re-tokenized), ~705 ns for an Azure diagnostic record
+with a nested `properties.log` payload, and ~197 ns for a 1 kB line that
+matches nothing (the table is skipped almost entirely via first-byte
+dispatch, positional gates, and memoized substring prefilters).
 
 Each of those figures includes one allocation: the 352-byte `Result`. The
 parsing itself allocates nothing — JSON and logfmt values alias the input
 rather than being copied — so reusing a `Result` runs the whole pipeline
 **allocation-free**. For a caller that already holds `[]byte` (a
 `bufio.Scanner`, a network buffer), `ParseBytes` also skips the line copy that
-`string(b)` would make — 352 ns and 0 B/line, against 586 ns and 768 B for
+`string(b)` would make — 326 ns and 0 B/line, against 544 ns and 768 B for
 `Parse(string(b))`:
 
 ```go
