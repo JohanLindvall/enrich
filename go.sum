@@ -1,7 +1,7 @@
-github.com/JohanLindvall/lightning v0.0.59 h1:kXQLfVE+C3pZBN9T1gN3eDbN80AUYYnB/f/sQEUj24Y=
-github.com/JohanLindvall/lightning v0.0.59/go.mod h1:uGs5O1o/2myfnC3XsItHKPCIKDpVae66exbxNpSq430=
-github.com/JohanLindvall/logfmt v0.0.12 h1:McSo+mPFtePJCCDMc6mFNJ0iv5OaNLOKjH3zfV8lc98=
-github.com/JohanLindvall/logfmt v0.0.12/go.mod h1:Iq1eVC2DqVa+LwlXdW0bW38v2nL9F/HE4tCT5XUqDO8=
+github.com/JohanLindvall/lightning v0.0.61 h1:Z1jD6tm/HFhMW3psOTJ6ZnVP3z43bM6bDqn3PQpzCGE=
+github.com/JohanLindvall/lightning v0.0.61/go.mod h1:uGs5O1o/2myfnC3XsItHKPCIKDpVae66exbxNpSq430=
+github.com/JohanLindvall/logfmt v0.0.13 h1:4ilWIHRgg8uHUoVTowwm7VjwY5BAu2sMwpnNpMDmnSo=
+github.com/JohanLindvall/logfmt v0.0.13/go.mod h1:Iq1eVC2DqVa+LwlXdW0bW38v2nL9F/HE4tCT5XUqDO8=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
