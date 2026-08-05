@@ -62,6 +62,7 @@ debug unparsed lines.
 |---|---|
 | `Body`, `Format` | the input line, and the strategy that parsed it |
 | `Time` | always UTC; a timestamp with no offset is read as UTC, and a format with no year (klog, syslog RFC3164) infers it from the clock |
+| `TimeHasZone` | whether the timestamp stated its own offset (RFC3339, an epoch, any zoned layout) or was a bare wall clock read as UTC — what a caller holding a runtime's own ingest time needs to know before preferring the line's |
 | `Severity`, `SeverityNumber` | normalized level and its OTLP severity number |
 | `Message` | the message without its envelope (JSON/logfmt only — a plain-text line's message is not separable from `Body`) |
 | `HTTPStatusCode` | the status code the line reports, 0 if none |
@@ -75,6 +76,23 @@ span), dashes permitted in a trace ID so an Envoy `request_id` UUID is
 accepted and de-dashed. A field that merely contains an ID inside a sentence
 is not one, and neither is the all-zero ID that W3C trace-context defines as
 invalid and that OpenTelemetry SDKs emit for a record with no active span.
+
+## Timestamps
+
+`Time` is always UTC, but only some of the formats out there say what zone
+their timestamp is in. RFC3339 stamps, numeric epochs and any layout carrying
+an offset name an instant; klog's `MMDD hh:mm:ss`, syslog RFC3164's
+`Mmm dd hh:mm:ss`, `2006-01-02 15:04:05` and the slash-date forms carry a bare
+wall clock, which this package reads as UTC because nothing in the line says
+otherwise. A process running with `TZ` set to anything else therefore produces
+a `Time` displaced by exactly that zone's offset.
+
+`TimeHasZone` reports which kind you got. It matters to callers that hold a
+second timestamp they trust — a container runtime's or a journal's ingest time
+— and have to decide which is the better datum: a zoned `Time` is an instant
+and can be preferred however far apart the two are, while a zone-less one is a
+wall clock in an unknown zone, and the ingest time is usually closer to the
+truth than a stamp that may be hours out.
 
 ## Severity
 

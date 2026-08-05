@@ -24,9 +24,23 @@ type compiledLineParser struct {
 	gates       []posGate
 	re          *regexp.Regexp
 	names       []string // re.SubexpNames(), hoisted out of the per-line loop
-	ts          []string
+	ts          []tsLayout
 	fastTS      func(string) (time.Time, bool)        // family parser for ts, or nil
+	fastTSZoned bool                                  // every layout fastTS covers carries a zone
 	fast        func(string) (fastSpans, fastVerdict) // hand matcher, or nil
+}
+
+// tsLayout is one timestamp layout plus the fact about it that its string does
+// not spell out: whether it carries a zone element (see layoutHasZone), i.e.
+// whether a value it parses is an instant or an unanchored wall clock. They
+// travel together — as one struct rather than two parallel slices — because
+// zonedness is a property of the layout that CLAIMED a value, and the nginx
+// entry alone offers one of each. The flag is computed once in init: three
+// substring scans per parsed timestamp would be real cost on the RFC3339
+// entries, which have no fast family parser.
+type tsLayout struct {
+	layout string
+	zoned  bool
 }
 
 // posGate is a fixed-position byte requirement derived from a pattern's
@@ -143,6 +157,10 @@ func init() {
 		if len(p.contain) == 1 {
 			containByte = p.contain[0]
 		}
+		ts := make([]tsLayout, len(p.ts))
+		for i, layout := range p.ts {
+			ts[i] = tsLayout{layout: layout, zoned: layoutHasZone(layout)}
+		}
 		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
 			contain:     p.contain,
 			containByte: containByte,
@@ -153,8 +171,9 @@ func init() {
 			gates:       gates,
 			re:          re,
 			names:       re.SubexpNames(),
-			ts:          p.ts,
+			ts:          ts,
 			fastTS:      fastLayoutTime(p.ts),
+			fastTSZoned: allLayoutsHaveZone(p.ts),
 			fast:        fastMatcherFor(p.re),
 		})
 	}
@@ -424,7 +443,9 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 		result.Severity = value
 	case "syslogtime":
 		if ts, ok := parseSyslogTime(value); ok {
-			result.Time = ts
+			// An epoch names an instant outright: there is no wall clock and
+			// no zone to be missing, so it is reported as zoned.
+			result.setTime(ts, true)
 		}
 	case "time", "ktime", "stamptime":
 		if len(clp.ts) == 0 {
@@ -434,16 +455,17 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 		case "ktime":
 			// The direct parse skips expandKlogTime's year-prefix allocation
 			// and the layout loop; unclaimed shapes take the old path below.
+			// klog writes a bare local wall clock, hence never a zone.
 			if ts, ok := parseKlogTime(value, time.Now().UTC()); ok {
-				result.Time = ts
+				result.setTime(ts, false)
 				return
 			}
 			value = expandKlogTime(value, time.Now().UTC())
 		case "stamptime":
 			// As for klog: parse directly, fall back to the year-prefix path
-			// for unclaimed shapes.
+			// for unclaimed shapes. RFC3164 carries no zone either.
 			if ts, ok := parseStampTime(value, time.Now().UTC()); ok {
-				result.Time = ts
+				result.setTime(ts, false)
 				return
 			}
 			value = expandStampTime(value, time.Now().UTC())
@@ -451,8 +473,8 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 		// A layout that does not parse simply leaves Time zero; the caller
 		// sees that (and Result.Format) rather than the package writing to a
 		// global logger.
-		if ts, ok := clp.parseLayoutTime(value); ok {
-			result.Time = ts
+		if ts, zoned, ok := clp.parseLayoutTime(value); ok {
+			result.setTime(ts, zoned)
 		}
 	case "response_code":
 		// An access log observes the code rather than reporting a failure, so
@@ -485,30 +507,31 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 }
 
 // parseLayoutTime tries the parser's layouts in order and returns the first
-// successfully parsed timestamp, in UTC. The hand-rolled family parser, when
-// one covers this layout list, decides the canonical shapes without
-// re-tokenizing a layout; a shape it does not claim falls through to the
-// loop, so the fast path can only ever change speed, not outcome
-// (timeparse_test.go holds it to that).
-func (clp *compiledLineParser) parseLayoutTime(ts string) (time.Time, bool) {
+// successfully parsed timestamp, in UTC, along with whether the layout that
+// claimed it carries a zone (see layoutHasZone). The hand-rolled family
+// parser, when one covers this layout list, decides the canonical shapes
+// without re-tokenizing a layout; a shape it does not claim falls through to
+// the loop, so the fast path can only ever change speed, not outcome
+// (timeparse_test.go holds it to that, zonedness included).
+func (clp *compiledLineParser) parseLayoutTime(ts string) (time.Time, bool, bool) {
 	if clp.fastTS != nil {
 		if t, ok := clp.fastTS(ts); ok {
-			return t, true
+			return t, clp.fastTSZoned, true
 		}
 	}
-	for _, layout := range clp.ts {
+	for _, l := range clp.ts {
 		// Skip a layout that cannot match: only RFC3339Nano carries a
 		// 'T' date/time separator at index 10, so a 'T'-vs-space
 		// disagreement there means time.Parse would fail (and allocate
 		// a parse error) for nothing.
-		if len(ts) > 10 && len(layout) > 10 && (layout[10] == 'T') != (ts[10] == 'T') {
+		if len(ts) > 10 && len(l.layout) > 10 && (l.layout[10] == 'T') != (ts[10] == 'T') {
 			continue
 		}
-		if t, err := time.Parse(layout, ts); err == nil {
-			return t.UTC(), true
+		if t, err := time.Parse(l.layout, ts); err == nil {
+			return t.UTC(), l.zoned, true
 		}
 	}
-	return time.Time{}, false
+	return time.Time{}, false, false
 }
 
 // expandKlogTime prefixes a year onto a klog "MMDD hh:mm:ss..." timestamp,

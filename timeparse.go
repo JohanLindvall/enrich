@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"strings"
 	"time"
 )
 
@@ -143,6 +144,51 @@ func utcStamp(y, mo, d, hh, mi, ss, ns, offset int) time.Time {
 		t = t.Add(-time.Duration(offset) * time.Second)
 	}
 	return t
+}
+
+// zoneTokens are the reference-layout elements that carry a zone: the numeric
+// offset forms (Z0700, Z07:00, Z07, -0700, -07:00, -07, and their
+// seconds-bearing variants, all of which start with one of these two prefixes)
+// and the abbreviation MST.
+var zoneTokens = [...]string{"Z07", "-07", "MST"}
+
+// layoutHasZone reports whether a layout carries a zone element — that is,
+// whether the input it parses states its own UTC offset. It is what
+// Result.TimeHasZone is derived from: a zone-less layout leaves the wall clock
+// unanchored, and every parser here reads such a stamp as UTC because there is
+// nothing else it could do, so the resulting Time is only an instant if the
+// writer's clock really was UTC.
+//
+// The substring test is exact for a layout built from the reference date: none
+// of its other elements ("2006", "01", "Jan", "02", "Mon", "15", "04", "05",
+// ".000") can produce "Z07", "-07" or "MST", and a literal in a layout that
+// did would be pathological. TestLayoutHasZoneMatchesRoundTrip pins every
+// layout in the table against a round-trip oracle rather than trusting that
+// argument.
+func layoutHasZone(layout string) bool {
+	for _, tok := range zoneTokens {
+		if strings.Contains(layout, tok) {
+			return true
+		}
+	}
+	return false
+}
+
+// allLayoutsHaveZone reports whether every layout in ts carries a zone. A
+// family parser claims shapes from its whole list, so it can only promise a
+// zone when they all do; an empty or mixed list answers false, which is the
+// safe direction (a caller weighing a parsed stamp against a producer's own
+// treats "no zone" as "ambiguous wall clock").
+func allLayoutsHaveZone(ts []string) bool {
+	if len(ts) == 0 {
+		return false
+	}
+	for _, layout := range ts {
+		if !layoutHasZone(layout) {
+			return false
+		}
+	}
+	return true
 }
 
 // parseYmdSlashTime is the family parser for ymdSlashLayouts

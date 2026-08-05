@@ -110,6 +110,24 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   traceparent keys are found wherever they appear.
 - **klog timestamps carry no year** — `expandKlogTime` infers it and adjusts
   across year boundaries; the corresponding test skips the year.
+- **`Result.TimeHasZone` says whether `Time` is an instant or a wall clock.**
+  A zone-less layout is read as UTC because nothing else is possible, so a
+  process with `TZ` set elsewhere emits stamps displaced by that offset — a
+  caller holding a runtime's own ingest time has to be able to tell the two
+  apart. Zonedness is a property of the **layout that claimed the value**, not
+  of the table entry (the nginx entry offers `02/Jan/2006:15:04:05 -0700` *and*
+  `02/Jan/2006 15:04:05`), which is why layouts are compiled into `tsLayout`
+  pairs rather than a `[]string` beside a `[]bool`. `layoutHasZone` decides it
+  by the reference-layout tokens (`Z07`/`-07`/`MST`) and
+  `TestLayoutHasZoneMatchesRoundTrip` pins that to an oracle that formats one
+  instant in two zones and parses both back — a new layout the token test reads
+  wrong fails there. The JSON and logfmt paths assert `true` outright because
+  neither dependency accepts a zone-less shape (lightning's lax time decoder
+  wants RFC3339 or an epoch; `logfmt.ParseTime` wants RFC3339Nano, the
+  `-0700 MST` form or an epoch); `TestJSONTimestampsAlwaysCarryAZone` and
+  `TestLogfmtTimestampsAlwaysCarryAZone` fail if either widens. Every write to
+  `Time` goes through `setTime`, so the two fields cannot drift apart — an
+  embedded line's answer travels with its timestamp through `mergeNested`.
 - **Envoy `response_code: 0`**: no `protocol` field → TCP proxying, info;
   `response_flags` DR/DC → client disconnect, warn.
 - **Pino numeric levels** are handled by a raw-line scan (`pinoSeverity`),

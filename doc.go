@@ -34,6 +34,15 @@
 // Result.Time is returned in UTC. Formats whose timestamp has no year (klog,
 // syslog RFC3164) infer it from the clock.
 //
+// Result.TimeHasZone reports which of those two happened: true when the line's
+// timestamp stated its own offset (an RFC3339 stamp, a numeric epoch, any
+// zoned layout) and false when it carried only a wall clock that had to be
+// read as UTC. A caller holding a second, unambiguous timestamp — a container
+// runtime's or a journal's ingest time — needs it to decide which is the
+// better datum: a process running with TZ set to anything but UTC writes
+// zone-less stamps displaced by exactly that zone's offset, and nothing in the
+// line says so.
+//
 // # Severity
 //
 // Severities are normalized to trace, debug, info, warn, error, and fatal.

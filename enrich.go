@@ -200,6 +200,24 @@ type Result struct {
 	// Time is the timestamp parsed from the line; zero when none was found.
 	Time time.Time
 
+	// TimeHasZone reports whether the shape Time was parsed from stated its own
+	// UTC offset — an RFC3339 stamp (or any other layout carrying a zone), a
+	// numeric epoch, a JSON or logfmt timestamp. It is false for the layouts
+	// that carry only a wall clock (klog's "MMDD hh:mm:ss", syslog RFC3164's
+	// "Mmm dd hh:mm:ss", "2006-01-02 15:04:05", the slash-date forms, ...),
+	// which this package must read as UTC because nothing in the line says
+	// otherwise: a process running with TZ set to anything else then produces a
+	// Time displaced by exactly that zone's offset, and the line cannot tell
+	// you so.
+	//
+	// It exists for callers that hold a second, unambiguous timestamp — a
+	// container runtime's or a journal's ingest time — and must decide whether
+	// the line's own is the better datum. A zoned Time is an instant and may be
+	// trusted however far it is from theirs; a zone-less one is a wall clock in
+	// an unknown zone. It says nothing when Time is zero — no timestamp was
+	// parsed, so there is none to have carried a zone.
+	TimeHasZone bool
+
 	// Severity is the normalized level (trace/debug/info/warn/error/fatal, see
 	// SeverityFromText) and SeverityNumber its numeric equivalent.
 	Severity       string
@@ -238,6 +256,15 @@ type Result struct {
 	ExceptionType       string
 	ExceptionMessage    string
 	ExceptionStackTrace string
+}
+
+// setTime records a parsed timestamp together with whether the shape it came
+// from stated its own UTC offset. Every assignment to Time goes through this,
+// so a later timestamp can never silently inherit an earlier one's zone answer
+// (a Docker json-file record whose embedded klog line parsed first, say).
+func (result *Result) setTime(t time.Time, hasZone bool) {
+	result.Time = t
+	result.TimeHasZone = hasZone
 }
 
 var ansiRe = regexp.MustCompile(`\x1b\[\d+(;\d+)*m`) // https://tforgione.fr/posts/ansi-escape-codes/
@@ -378,7 +405,11 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	if validSpanID(spanID) {
 		result.SpanID = spanID
 	}
-	result.Time = ts
+	// Every shape reaching a timestamp here carries a zone: parseGoStringTime
+	// claims only values with a numeric offset, and logfmt.ParseTime accepts
+	// RFC3339Nano, the "-0700 MST" form, and a unix epoch — nothing zone-less.
+	// TestLogfmtTimestampsAlwaysCarryAZone pins that dependency.
+	result.setTime(ts, tsFound)
 	result.Severity = level
 	// The message is kept even when the line is not claimed as logfmt: a
 	// key=value line the pattern table resolves instead (a Kubernetes event,
@@ -525,11 +556,14 @@ func (result *Result) applyJSON(f *enrichFields) {
 
 	// Timestamp (RFC3339 string or numeric epoch) decoded by the lax time.Time
 	// field; a zero value means absent/unparseable, so keep any properties.log
-	// time. MongoDB nests its timestamp as {"t":{"$date":...}}.
+	// time. MongoDB nests its timestamp as {"t":{"$date":...}}. Both shapes the
+	// decoder accepts state their own offset — RFC3339 mandates one, an epoch
+	// is an instant — so a JSON timestamp is always zoned
+	// (TestJSONTimestampsAlwaysCarryAZone pins that dependency).
 	if !f.Time.IsZero() {
-		result.Time = f.Time
+		result.setTime(f.Time, true)
 	} else if !f.MongoTime.Date.IsZero() {
-		result.Time = f.MongoTime.Date
+		result.setTime(f.MongoTime.Date, true)
 	}
 
 	result.applySeverityHints(f)
@@ -608,7 +642,10 @@ func jsonInt(n json.Number) (int64, bool) {
 // authoritative top-level scalar still wins over a lifted one.
 func (result *Result) mergeNested(nested *Result) {
 	if !nested.Time.IsZero() {
-		result.Time = nested.Time
+		// The embedded line's own answer travels with its timestamp: a Docker
+		// record wrapping a klog line carries a wall clock, whatever the
+		// envelope's own (zoned) "time" would have said.
+		result.setTime(nested.Time, nested.TimeHasZone)
 	}
 	if nested.SeverityNumber != 0 {
 		result.SeverityNumber = nested.SeverityNumber

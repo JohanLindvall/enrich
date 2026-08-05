@@ -23,21 +23,28 @@ func TestExpandKlogTime(t *testing.T) {
 }
 
 func TestParseLayoutTime(t *testing.T) {
-	clp := &compiledLineParser{ts: []string{time.RFC3339Nano, "2006-01-02 15:04:05"}}
+	clp := &compiledLineParser{ts: []tsLayout{
+		{time.RFC3339Nano, true},
+		{"2006-01-02 15:04:05", false},
+	}}
 
-	// A 'T'-separated timestamp matches the RFC3339Nano layout.
-	ts, ok := clp.parseLayoutTime("2026-07-06T12:00:00Z")
+	// A 'T'-separated timestamp matches the RFC3339Nano layout, which carries
+	// a zone.
+	ts, zoned, ok := clp.parseLayoutTime("2026-07-06T12:00:00Z")
 	require.True(t, ok)
 	assert.Equal(t, "2026-07-06 12:00:00 +0000 UTC", ts.String())
+	assert.True(t, zoned)
 
 	// A space-separated timestamp skips the RFC3339Nano layout (the 'T'
-	// disagreement at index 10) and matches the second layout.
-	ts, ok = clp.parseLayoutTime("2026-07-06 12:00:00")
+	// disagreement at index 10) and matches the second layout, which does not:
+	// the answer belongs to the layout that claimed the value, not the entry.
+	ts, zoned, ok = clp.parseLayoutTime("2026-07-06 12:00:00")
 	require.True(t, ok)
 	assert.Equal(t, "2026-07-06 12:00:00 +0000 UTC", ts.String())
+	assert.False(t, zoned)
 
 	// No layout matches.
-	_, ok = clp.parseLayoutTime("not a timestamp")
+	_, _, ok = clp.parseLayoutTime("not a timestamp")
 	assert.False(t, ok)
 }
 
@@ -99,10 +106,11 @@ func TestFirstBytes(t *testing.T) {
 
 func TestApplySubmatch_BadTime(t *testing.T) {
 	// A time submatch that fails every layout leaves the time zero.
-	clp := &compiledLineParser{re: regexp.MustCompile(`x`), ts: []string{time.RFC3339Nano}}
+	clp := &compiledLineParser{re: regexp.MustCompile(`x`), ts: []tsLayout{{time.RFC3339Nano, true}}}
 	var r Result
 	clp.applySubmatch(&r, "time", "garbage")
 	assert.True(t, r.Time.IsZero())
+	assert.False(t, r.TimeHasZone, "no time parsed, so nothing to report a zone for")
 }
 
 // TestRareByteInContain pins the gate's correctness invariant: the rare byte

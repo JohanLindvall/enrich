@@ -253,6 +253,170 @@ func TestParseGoStringTimeMatchesParseTime(t *testing.T) {
 	}
 }
 
+// layoutZoneOracle decides, the one way that cannot be argued with, whether a
+// layout carries a zone: format ONE instant with it twice, once in UTC and
+// once five hours east, and parse both texts back. A layout with a zone
+// element reproduces the instant from either text; a zone-less one writes two
+// wall clocks five hours apart and reads both as UTC, so they disagree.
+//
+// Comparing the two round trips rather than either against the original makes
+// the oracle immune to what a layout cannot express (a dropped fraction, a
+// dropped weekday): both sides lose exactly the same components.
+//
+// It would call a layout carrying ONLY an unresolvable abbreviation ("MST"
+// with no numeric offset) zone-less, since time.Parse gives such a name offset
+// zero. No layout here is that shape; one added later shows up as a
+// disagreement with layoutHasZone, which is the conversation to have.
+func layoutZoneOracle(t *testing.T, layout string) bool {
+	t.Helper()
+	instant := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	east := instant.In(time.FixedZone("TST", 5*60*60))
+	a, errA := time.Parse(layout, instant.Format(layout))
+	b, errB := time.Parse(layout, east.Format(layout))
+	require.NoError(t, errA, "layout %q does not round-trip its own output", layout)
+	require.NoError(t, errB, "layout %q does not round-trip its own output", layout)
+	return a.UTC().Equal(b.UTC())
+}
+
+// TestLayoutHasZoneMatchesRoundTrip pins layoutHasZone — a substring test over
+// the reference-layout tokens — to the round-trip oracle, for every layout the
+// table actually uses. It is what keeps Result.TimeHasZone honest as entries
+// are added: a new layout whose zonedness the token test reads wrong fails
+// here rather than mislabelling a fleet's timestamps.
+func TestLayoutHasZoneMatchesRoundTrip(t *testing.T) {
+	seen := map[string]bool{}
+	for _, clp := range compiledLineParsers {
+		for _, l := range clp.ts {
+			seen[l.layout] = true
+			assert.Equal(t, layoutZoneOracle(t, l.layout), l.zoned,
+				"layout %q: compiled zone flag disagrees with the round trip", l.layout)
+			assert.Equal(t, l.zoned, layoutHasZone(l.layout),
+				"layout %q: compiled flag is not layoutHasZone's answer", l.layout)
+		}
+	}
+	// The table must contain layouts of BOTH kinds, or the assertions above
+	// would pass on a function that answers one way for everything.
+	var zoned, bare int
+	for layout := range seen {
+		if layoutHasZone(layout) {
+			zoned++
+		} else {
+			bare++
+		}
+	}
+	assert.Greater(t, zoned, 0, "no zoned layout in the table")
+	assert.Greater(t, bare, 0, "no zone-less layout in the table")
+}
+
+// TestFastFamilyLayoutsAgreeOnZone pins the promise fastTSZoned makes: a
+// family parser claims values from its whole layout list, so it may report a
+// zone only when every layout in that list carries one. A mixed family would
+// have to answer per claimed shape, not per family.
+func TestFastFamilyLayoutsAgreeOnZone(t *testing.T) {
+	for _, fam := range tsFamilies {
+		want := layoutHasZone(fam.layouts[0])
+		for _, layout := range fam.layouts {
+			assert.Equal(t, want, layoutHasZone(layout),
+				"family %s mixes zoned and zone-less layouts; fastTSZoned cannot answer for it", fam.name)
+		}
+		assert.Equal(t, want, allLayoutsHaveZone(fam.layouts), "family %s", fam.name)
+	}
+	// And the compiled table wires that answer through: every entry with a
+	// fast parser reports what its layouts say.
+	for _, clp := range compiledLineParsers {
+		if clp.fastTS == nil {
+			continue
+		}
+		for _, l := range clp.ts {
+			assert.Equal(t, clp.fastTSZoned, l.zoned,
+				"layout %q disagrees with its entry's fastTSZoned", l.layout)
+		}
+	}
+}
+
+// TestTimeHasZoneByFormat is the end-to-end statement: for a line of each
+// shape the package parses, does Result.Time state its own offset? A caller
+// weighing the line's timestamp against a runtime's own ingest time keys on
+// this, so the answers are pinned per format rather than left to the layouts.
+func TestTimeHasZoneByFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		line string
+		want bool
+	}{
+		// Zone-less: a bare wall clock, which this package reads as UTC
+		// because nothing in the line says otherwise.
+		{"klog", `I0711 10:00:00.123456       1 controller.go:42] Reconciled deployment`, false},
+		{"spring boot", `2026-07-06 12:00:00.123  WARN 1 --- [main] c.e.ClientApp : Connection refused`, false},
+		{"python logging", `2026-07-06 12:00:00,123 - app.web - WARNING - disk almost full`, false},
+		{"slash date", `2026/07/06 12:00:00 [error] upstream timed out`, false},
+		{"syslog rfc3164", `<11>Jul  6 12:00:00 host app[42]: something failed`, false},
+		{"apache error log", `[Wed Oct 11 14:32:52 2000] [error] [client 203.0.113.1] client denied`, false},
+		{"redis", `1:M 06 Jul 2026 12:00:00.123 * Background saving started`, false},
+		{"nginx without an offset", `203.0.113.7 - - [14/Mar/2026 06:42:27] "GET /healthz HTTP/1.1" 404 13 "" "probe/2.7"`, false},
+
+		// Zoned: the line states its offset, or names an instant outright.
+		{"rfc3339", `2026-07-06T12:00:00.5+02:00 ERROR something broke`, true},
+		{"rfc3339 space separator", `2026-07-06 12:00:00.123Z INFO started`, true},
+		{"offset with a space", `2026-07-06 12:00:00.123 +02:00 [main] ERROR: boom`, true},
+		{"syslog rfc5424", `<134>1 2026-07-06T12:00:00.123Z host app 1234 ID47 - An application event`, true},
+		{"librdkafka epoch", `%4|1700000000.123|FAIL|rdkafka#producer-1| [thrd:main]: broker connection down`, true},
+		{"nginx with an offset", `203.0.113.7 - - [14/Mar/2026:06:42:27 -0700] "POST /api/orders HTTP/1.1" 200 658 "-" "curl/8.5" 650 0.023`, true},
+		{"json rfc3339", `{"@t":"2026-07-06T12:00:00Z","@l":"Error","@m":"boom"}`, true},
+		{"json epoch", `{"level":50,"time":1751805600000,"msg":"connection refused"}`, true},
+		{"logfmt rfc3339", `ts=2026-07-06T12:00:00Z level=info msg=x`, true},
+		{"logfmt go string", `t="2026-03-14 06:11:46.397 +0000 UTC" level=info msg=x`, true},
+		{"logfmt epoch", `ts=1748239806.3691056 level=info msg=x`, true},
+
+		// A nested line answers for the timestamp it contributed: the Docker
+		// envelope carries no time of its own, so the embedded klog stamp —
+		// and its wall-clock ambiguity — is what the result holds.
+		{"docker json-file wrapping klog", `{"log":"I0711 10:00:00.123456       1 x.go:42] hi\n","stream":"stdout"}`, false},
+		{"docker json-file with its own time", `{"log":"I0711 10:00:00.123456       1 x.go:42] hi\n","stream":"stdout","time":"2026-07-06T12:00:00Z"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enriched := Parse(tc.line)
+			require.False(t, enriched.Time.IsZero(), "no timestamp parsed at all")
+			assert.Equal(t, tc.want, enriched.TimeHasZone)
+		})
+	}
+
+	// No timestamp, no zone claim.
+	assert.False(t, Parse("a plain line with no metadata whatsoever").TimeHasZone)
+	assert.False(t, Parse(`{"msg":"no timestamp here"}`).TimeHasZone)
+	assert.False(t, Parse(`level=info msg="no timestamp here"`).TimeHasZone)
+}
+
+// TestLogfmtTimestampsAlwaysCarryAZone and TestJSONTimestampsAlwaysCarryAZone
+// pin the two dependency facts enrichFromLogFmt and applyJSON assert rather
+// than derive: neither logfmt.ParseTime nor lightning's lax time decoder
+// accepts a zone-less shape, so a timestamp from either path is an instant. If
+// a dependency widens its accepted set, these fail instead of the flag quietly
+// starting to lie.
+func TestLogfmtTimestampsAlwaysCarryAZone(t *testing.T) {
+	for _, zoneless := range []string{
+		"2026-07-06 12:00:00", "2026-07-06 12:00:00.123", "2026-07-06T12:00:00",
+		"2026/07/06 12:00:00", "0711 10:00:00", "Jul  6 12:00:00",
+		"2026-07-06 12:00:00.123 (no zone)",
+	} {
+		_, ok := logfmt.ParseTime([]byte(zoneless))
+		assert.False(t, ok, "logfmt.ParseTime now accepts the zone-less %q", zoneless)
+		_, ok = parseGoStringTime([]byte(zoneless))
+		assert.False(t, ok, "parseGoStringTime now accepts the zone-less %q", zoneless)
+	}
+}
+
+func TestJSONTimestampsAlwaysCarryAZone(t *testing.T) {
+	for _, zoneless := range []string{
+		"2026-07-06 12:00:00", "2026-07-06 12:00:00.123", "2026-07-06T12:00:00",
+		"2026-07-06T12:00:00.123", "2026/07/06 12:00:00",
+	} {
+		var r Result
+		ParseInto(`{"ts":"`+zoneless+`","msg":"x"}`, &r)
+		assert.True(t, r.Time.IsZero(), "the JSON decoder now accepts the zone-less %q", zoneless)
+	}
+}
+
 // TestFastTSWiredIntoTable asserts the compiled table actually carries fast
 // parsers for the families that have one, so a layout-list edit cannot
 // silently drop the fast path.
