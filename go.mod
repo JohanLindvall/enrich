@@ -3,8 +3,8 @@ module github.com/JohanLindvall/enrich
 go 1.26.3
 
 require (
-	github.com/JohanLindvall/lightning v0.0.61
-	github.com/JohanLindvall/logfmt v0.0.13
+	github.com/JohanLindvall/lightning v0.0.63
+	github.com/JohanLindvall/logfmt v0.0.14
 	github.com/stretchr/testify v1.11.1
 )
 

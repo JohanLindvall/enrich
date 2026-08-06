@@ -64,7 +64,7 @@ func (v *httpResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func decodeTimeNoCopyLaxValue(v *time.Time, data []byte, i int) (int, error) {
+func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(v *time.Time, data []byte, i int) (int, error) {
 	t, end, err := unstable.ReadTimeLaxOrNull(data, i)
 	if err != nil {
 		return end, err
@@ -74,7 +74,7 @@ func decodeTimeNoCopyLaxValue(v *time.Time, data []byte, i int) (int, error) {
 	return i, nil
 }
 
-func decodeStringNoCopyLaxValue(v *string, data []byte, i int) (int, error) {
+func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(v *string, data []byte, i int) (int, error) {
 	s, end, err := unstable.ReadStringNoCopyOrNull(data, i)
 	if err != nil {
 		return end, err
@@ -84,7 +84,7 @@ func decodeStringNoCopyLaxValue(v *string, data []byte, i int) (int, error) {
 	return i, nil
 }
 
-func decodeNumberNoCopyLaxValue(v *json.Number, data []byte, i int) (int, error) {
+func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(v *json.Number, data []byte, i int) (int, error) {
 	s, end, err := unstable.ReadNumberNoCopyOrNull(data, i)
 	if err != nil {
 		return end, err
@@ -158,7 +158,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodemongoDate(v *mongoDa
 		switch key {
 		case "$date":
 			var lax time.Time
-			end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -259,7 +259,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(v *
 		switch key {
 		case "log":
 			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -271,7 +271,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(v *
 			i = end
 		case "response":
 			var lax string
-			end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -283,7 +283,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichProperties(v *
 			i = end
 		case "httpStatusCode":
 			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -384,7 +384,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichResponseStatus
 		switch key {
 		case "code":
 			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
@@ -499,7 +499,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "s":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -516,7 +516,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "@t", "ts":
 				var lax time.Time
-				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -528,7 +528,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@l":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -540,7 +540,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@m":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -552,7 +552,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@i":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -564,7 +564,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@x":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -581,7 +581,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "msg":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -593,7 +593,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@mt":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -605,7 +605,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@sv":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -617,7 +617,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@sn":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -629,7 +629,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "@sp":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -641,7 +641,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "log":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -658,7 +658,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "time", "Time":
 				var lax time.Time
-				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -675,7 +675,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "level":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -692,7 +692,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "@level":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -704,7 +704,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "spanid", "spanId", "spanID", "SpanId", "SpanID":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -716,7 +716,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "logger":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -733,7 +733,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "message", "Message", "MESSAGE":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -745,7 +745,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "traceid", "traceId", "traceID", "TraceId", "TraceID":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -757,7 +757,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "span_id", "span.id":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -774,7 +774,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "severity", "Severity":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -786,7 +786,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "trace_id", "trace.id":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -798,7 +798,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "protocol":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -815,7 +815,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "timestamp", "Timestamp":
 				var lax time.Time
-				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -827,7 +827,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "log.level", "levelname":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -839,7 +839,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "exception":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -856,7 +856,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "@timestamp":
 				var lax time.Time
-				end, err := decodeTimeNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeTimeNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -868,7 +868,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "request_id":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -880,7 +880,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "loggerName":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -892,7 +892,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "resourceID", "resourceId", "ResourceId":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -904,7 +904,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "error.type":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -916,7 +916,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "resultType":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -928,7 +928,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "statusCode", "StatusCode":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -957,7 +957,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "traceparent", "Traceparent", "TraceParent":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -969,7 +969,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "logger_name":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -981,7 +981,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "resourceUri", "resourceURI":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -993,7 +993,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "status_code":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1010,7 +1010,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "severityText", "SeverityText":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1022,7 +1022,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "service.name":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1034,7 +1034,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "responseCode":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1051,7 +1051,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "sourcecontext", "sourceContext", "SourceContext":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1063,7 +1063,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "eventCategory", "eventcategory", "EventCategory":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1075,7 +1075,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "error.message":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1087,7 +1087,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "response_code":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1104,7 +1104,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "severityNumber":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1116,7 +1116,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "exception.type":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1128,7 +1128,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "response_flags":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1157,7 +1157,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 			switch key {
 			case "severity_number":
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1169,7 +1169,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			case "service.version":
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1185,7 +1185,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		case 17:
 			if key[0:16] == "exception.messag" && key[16:] == "e" {
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1197,7 +1197,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			} else if key[0:16] == "error.stack_trac" && key[16:] == "e" {
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1209,7 +1209,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 				i = end
 			} else if key[0:16] == "resultDescriptio" && key[16:] == "n" {
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1225,7 +1225,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		case 18:
 			if key[0:16] == "grpc_status_numb" && key[16:] == "er" {
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1241,7 +1241,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		case 20:
 			if key[0:16] == "exception.stackt" && key[16:] == "race" {
 				var lax string
-				end, err := decodeStringNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeStringNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1257,7 +1257,7 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		case 25:
 			if key[0:16] == "http.response.st" && key[16:] == "atus_code" {
 				var lax json.Number
-				end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+				end, err := lightningGithubComJohanLindvallEnrichenrichFieldsdecodeNumberNoCopyLaxValue(&lax, data, i)
 				if err != nil {
 					end, err = unstable.SkipValue(data, i)
 					if err != nil {
@@ -1300,6 +1300,16 @@ func lightningGithubComJohanLindvallEnrichenrichFieldsdecodeenrichFields(v *enri
 		}
 		i++
 	}
+}
+
+func lightningGithubComJohanLindvallEnrichhttpResponsedecodeNumberNoCopyLaxValue(v *json.Number, data []byte, i int) (int, error) {
+	s, end, err := unstable.ReadNumberNoCopyOrNull(data, i)
+	if err != nil {
+		return end, err
+	}
+	(*v) = json.Number(s)
+	i = end
+	return i, nil
 }
 
 func lightningGithubComJohanLindvallEnrichhttpResponsedecodehttpResponse(v *httpResponse, data []byte, i int) (int, error) {
@@ -1366,7 +1376,7 @@ func lightningGithubComJohanLindvallEnrichhttpResponsedecodehttpResponse(v *http
 		switch key {
 		case "statusCode":
 			var lax json.Number
-			end, err := decodeNumberNoCopyLaxValue(&lax, data, i)
+			end, err := lightningGithubComJohanLindvallEnrichhttpResponsedecodeNumberNoCopyLaxValue(&lax, data, i)
 			if err != nil {
 				end, err = unstable.SkipValue(data, i)
 				if err != nil {
