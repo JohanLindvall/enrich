@@ -291,9 +291,12 @@ func removeDashesASCII(s string) string {
 
 // logfmtKeyStart marks the first bytes of the keys enrichFromLogFmt's switch
 // inspects (t/ts/time/timestamp, level, msg/message, the trace/span/
-// traceparent spellings), both cases. Built in init from the actual case
-// lists so it cannot drift from the switch. A key starting with any other
-// byte is rejected with one load.
+// traceparent spellings), both cases. The init list below mirrors the
+// switch's case clauses by hand — a new case whose key starts with a byte
+// missing here is silently never matched, so extend both together; the
+// per-spelling tests (TestParse_TraceIDSpellings,
+// TestParse_Logfmt_TimestampKeys, TestParse_Logfmt_Message) are what catch a
+// miss. A key starting with any other byte is rejected with one load.
 var logfmtKeyStart [256]bool
 
 func init() {
@@ -330,9 +333,11 @@ func parseTraceparent(v string) (traceID, spanID string) {
 // using — true when a timestamp parsed, a non-empty level was seen, or a
 // trace ID was found. The time is zero for a level-only line.
 //
-// The first parseable timestamp wins. For the level, a value that normalizes to a
-// known severity wins over an earlier non-normalizing one (e.g. the inner
-// "level=a@1 level=info" keeps "info").
+// The first parseable timestamp wins, as does the first valid trace/span ID.
+// For the level, a value that normalizes to a known severity wins over an
+// earlier non-normalizing one (e.g. the inner "level=a@1 level=info" keeps
+// "info"). Explicit trace_id/span_id keys win over a traceparent wherever
+// either appears — the same precedence applyMetadata gives the JSON fields.
 func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	if !memo.has(message, '=') {
 		return false
@@ -340,7 +345,8 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 
 	var ts time.Time
 	var tsFound, levelGood bool
-	var level, msg, traceID, spanID string
+	var levelNo int
+	var level, msg, traceID, spanID, tpTraceID, tpSpanID string
 
 	// message is immutable; alias its bytes rather than copying.
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
@@ -373,8 +379,13 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 			}
 		case "level":
 			if !levelGood {
-				if sev, _ := SeverityFromText(sval); sev != "" {
-					level, levelGood = sval, true
+				// Normalize here rather than leaving it to ParseInto's final
+				// pass: the canonical text turns that pass into a
+				// constant-switch hit instead of a second LUT probe, and the
+				// number keeps the grading ("notice" is an info with the INFO2
+				// number) exactly as re-normalizing the raw text would.
+				if sev, no := SeverityFromText(sval); sev != "" {
+					level, levelNo, levelGood = sev, no, true
 				} else if level == "" {
 					level = sval
 				}
@@ -384,25 +395,39 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 				msg = sval
 			}
 		case "traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id":
-			if traceID == "" {
+			if traceID == "" && validTraceID(sval) {
 				traceID = sval
 			}
 		case "spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id":
-			if spanID == "" {
+			if spanID == "" && validSpanID(sval) {
 				spanID = sval
 			}
 		case "traceparent":
-			if t, s := parseTraceparent(sval); t != "" {
-				traceID, spanID = t, s
+			if tpTraceID == "" {
+				if t, s := parseTraceparent(sval); t != "" {
+					tpTraceID, tpSpanID = t, s
+				}
 			}
 		}
-		return !levelGood || !tsFound || traceID == "" || spanID == ""
+		// Keep scanning while any signal is still missing. A found traceparent
+		// does not stop the scan: an explicit trace_id/span_id later in the
+		// line would still win over it.
+		return !levelGood || !tsFound || msg == "" || traceID == "" || spanID == ""
 	})
 
-	if validTraceID(traceID) {
+	// Explicit keys name the record's own IDs and win; a propagated
+	// traceparent fills whichever side they left empty (the same rule as
+	// applyMetadata on the JSON path).
+	if traceID == "" {
+		traceID = tpTraceID
+	}
+	if spanID == "" {
+		spanID = tpSpanID
+	}
+	if traceID != "" {
 		result.TraceID = removeDashesASCII(traceID)
 	}
-	if validSpanID(spanID) {
+	if spanID != "" {
 		result.SpanID = spanID
 	}
 	// Every shape reaching a timestamp here carries a zone: parseGoStringTime
@@ -411,6 +436,9 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	// TestLogfmtTimestampsAlwaysCarryAZone pins that dependency.
 	result.setTime(ts, tsFound)
 	result.Severity = level
+	if levelGood {
+		result.SeverityNumber = levelNo
+	}
 	// The message is kept even when the line is not claimed as logfmt: a
 	// key=value line the pattern table resolves instead (a Kubernetes event,
 	// say) still carries its msg= in the same place.
@@ -709,7 +737,7 @@ func (result *Result) applySeverityHints(f *enrichFields) {
 		}
 	}
 
-	if grpc, ok := jsonInt(f.GrpcStatusNumber); ok && grpc <= 16 {
+	if grpc, ok := jsonInt(f.GrpcStatusNumber); ok && grpc >= 0 && grpc <= 16 {
 		if result.Severity == "" || result.Severity == "info" {
 			if grpc == 0 {
 				result.Severity = InfoLevel
@@ -886,9 +914,10 @@ func (result *Result) parseException(exception string) {
 	head, stack, hasStack := strings.Cut(exception, "\n")
 	if excType, message, ok := strings.Cut(head, ": "); ok {
 		// "Exception in thread "main" java.lang.IllegalStateException" and the
-		// like put words before the type; the type is the first of them.
-		if space := strings.IndexByte(excType, ' '); space >= 0 {
-			excType = excType[:space]
+		// like put words before the type; the type is the last of them, the
+		// one the ": " cut at.
+		if space := strings.LastIndexByte(excType, ' '); space >= 0 {
+			excType = excType[space+1:]
 		}
 		result.ExceptionType = excType
 		result.ExceptionMessage = message

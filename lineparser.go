@@ -480,12 +480,7 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 		// An access log observes the code rather than reporting a failure, so
 		// a 4xx grades to warn; the code itself is kept either way.
 		if code, err := strconv.ParseInt(value, 10, 64); err == nil {
-			if code >= 100 && code <= 599 {
-				result.HTTPStatusCode = int(code)
-			}
-			if httpSev := HTTPStatusSeverity(code, StatusObserved); httpSev != "" {
-				result.Severity = httpSev
-			}
+			setHTTPResponseCode(result, code, StatusObserved)
 		}
 	case "sysloglevel":
 		result.Severity, result.SeverityNumber = syslogSeverity(int(value[0] - '0'))
@@ -495,7 +490,7 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 			result.Severity, result.SeverityNumber = syslogSeverity(pri & 7)
 		}
 	case "redis_level":
-		result.Severity = getRedisSeverityText(value)
+		result.Severity = redisSeverity(value)
 	case "logaserror", "unhandled":
 		if result.Severity == "" {
 			result.Severity = ErrorLevel

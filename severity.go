@@ -356,7 +356,9 @@ func pinoSeverity(message string) string {
 	return ""
 }
 
-func getRedisSeverityText(severity string) string {
+// redisSeverity maps a redis log-level mark (the single character between the
+// timestamp and the message) to a severity.
+func redisSeverity(severity string) string {
 	switch severity {
 	case ".": // debug
 		return DebugLevel
@@ -388,7 +390,7 @@ const (
 // info, 5xx (and a 0, meaning no response at all) is an error-ish warn, and
 // 4xx depends on kind (see StatusKind). It returns "" for a code outside
 // 0-599.
-func HTTPStatusSeverity(code int64, kind StatusKind) string {
+func HTTPStatusSeverity(code int, kind StatusKind) string {
 	if code >= 0 && code <= 599 {
 		if code == 0 {
 			return ErrorLevel
@@ -413,12 +415,18 @@ func HTTPStatusSeverity(code int64, kind StatusKind) string {
 // metadata in its own right, and a caller that wants to route on the number
 // should not have to re-parse the line. A code outside 100-599 is not an HTTP
 // status (Envoy writes 0 for "no response at all") and is not recorded.
+// It takes int64 because every caller holds a freshly parsed JSON number; the
+// early return also keeps the int conversion exact on 32-bit ints.
 func setHTTPResponseCode(result *Result, code int64, kind StatusKind) {
-	if code >= 100 && code <= 599 {
-		result.HTTPStatusCode = int(code)
+	if code < 0 || code > 599 {
+		return
+	}
+	c := int(code)
+	if c >= 100 {
+		result.HTTPStatusCode = c
 	}
 	if kind == StatusFailure || result.Severity == "" || result.Severity == "info" {
-		if httpSev := HTTPStatusSeverity(code, kind); httpSev != "" {
+		if httpSev := HTTPStatusSeverity(c, kind); httpSev != "" {
 			result.Severity = httpSev
 		}
 	}

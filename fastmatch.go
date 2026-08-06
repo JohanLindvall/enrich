@@ -62,18 +62,19 @@ func isSpaceRE(c byte) bool {
 
 func isDigitB(c byte) bool { return c-'0' <= 9 }
 
-// stampSkeleton19 reports whether msg starts with the 19-byte digit skeleton
-// "dddd<sep>dd<sep>dd dd:dd:dd". It replicates the regex's structural test
-// only — value ranges are deliberately not checked, exactly like \d{4} isn't.
-func stampSkeleton19(msg string, sep byte) bool {
-	if len(msg) < 19 {
+// stampSkeleton reports whether s starts with the 19-byte digit skeleton
+// "dddd<dateSep>dd<dateSep>dd<timeSep>dd:dd:dd". It replicates the regexes'
+// structural test only — value ranges are deliberately not checked, exactly
+// like \d{4} isn't.
+func stampSkeleton(s string, dateSep, timeSep byte) bool {
+	if len(s) < 19 {
 		return false
 	}
-	return msg[4] == sep && msg[7] == sep && msg[10] == ' ' && msg[13] == ':' && msg[16] == ':' &&
-		isDigitB(msg[0]) && isDigitB(msg[1]) && isDigitB(msg[2]) && isDigitB(msg[3]) &&
-		isDigitB(msg[5]) && isDigitB(msg[6]) && isDigitB(msg[8]) && isDigitB(msg[9]) &&
-		isDigitB(msg[11]) && isDigitB(msg[12]) && isDigitB(msg[14]) && isDigitB(msg[15]) &&
-		isDigitB(msg[17]) && isDigitB(msg[18])
+	return s[4] == dateSep && s[7] == dateSep && s[10] == timeSep && s[13] == ':' && s[16] == ':' &&
+		isDigitB(s[0]) && isDigitB(s[1]) && isDigitB(s[2]) && isDigitB(s[3]) &&
+		isDigitB(s[5]) && isDigitB(s[6]) && isDigitB(s[8]) && isDigitB(s[9]) &&
+		isDigitB(s[11]) && isDigitB(s[12]) && isDigitB(s[14]) && isDigitB(s[15]) &&
+		isDigitB(s[17]) && isDigitB(s[18])
 }
 
 // tailZColonSpace matches the shared "(Z:)?\s" suffix at msg[i:], returning
@@ -92,7 +93,7 @@ func tailZColonSpace(msg string, i int) bool {
 // common plain-text entry. Greedy fraction consumption is exact: a shorter
 // fraction ends on a digit, which neither 'Z' nor \s accepts.
 func matchYmdSlashOptFrac(msg string) (fastSpans, fastVerdict) {
-	if !stampSkeleton19(msg, '/') {
+	if !stampSkeleton(msg, '/', ' ') {
 		return fastSpans{}, fastNoMatch
 	}
 	i := 19
@@ -111,7 +112,7 @@ func matchYmdSlashOptFrac(msg string) (fastSpans, fastVerdict) {
 // matchMsDashNoFrac decides `^(?P<time>\d{4}-\d{2}-\d{2}
 // \d{2}:\d{2}:\d{2})(Z:)?\s` (the fraction-less dash-date entry).
 func matchMsDashNoFrac(msg string) (fastSpans, fastVerdict) {
-	if !stampSkeleton19(msg, '-') {
+	if !stampSkeleton(msg, '-', ' ') {
 		return fastSpans{}, fastNoMatch
 	}
 	if !tailZColonSpace(msg, 19) {
@@ -123,7 +124,7 @@ func matchMsDashNoFrac(msg string) (fastSpans, fastVerdict) {
 // matchYmdSlash6Frac decides `^(?P<time>\d{4}/\d{2}/\d{2}
 // \d{2}:\d{2}:\d{2}\.\d{6})(Z:)?\s` (the mandatory-6-digit-fraction entry).
 func matchYmdSlash6Frac(msg string) (fastSpans, fastVerdict) {
-	if !stampSkeleton19(msg, '/') || len(msg) < 26 || msg[19] != '.' ||
+	if !stampSkeleton(msg, '/', ' ') || len(msg) < 26 || msg[19] != '.' ||
 		!isDigitB(msg[20]) || !isDigitB(msg[21]) || !isDigitB(msg[22]) ||
 		!isDigitB(msg[23]) || !isDigitB(msg[24]) || !isDigitB(msg[25]) {
 		return fastSpans{}, fastNoMatch
@@ -172,7 +173,7 @@ func matchRFC3339Level(msg string, sep byte, zSuffixOnly bool) (fastSpans, fastV
 		off = 1
 	}
 	s := msg[off:]
-	if !stampSkeletonSep(s, sep) {
+	if !stampSkeleton(s, '-', sep) {
 		return fastSpans{}, fastNoMatch
 	}
 	i := 19
@@ -219,19 +220,6 @@ func matchRFC3339Level(msg string, sep byte, zSuffixOnly bool) (fastSpans, fastV
 		spans.level = [2]int{k, e}
 	}
 	return spans, fastMatched
-}
-
-// stampSkeletonSep is stampSkeleton19 with a parameterized date/time
-// separator at index 10 (the dash-date skeleton "dddd-dd-dd<sep>dd:dd:dd").
-func stampSkeletonSep(s string, sep byte) bool {
-	if len(s) < 19 {
-		return false
-	}
-	return s[4] == '-' && s[7] == '-' && s[10] == sep && s[13] == ':' && s[16] == ':' &&
-		isDigitB(s[0]) && isDigitB(s[1]) && isDigitB(s[2]) && isDigitB(s[3]) &&
-		isDigitB(s[5]) && isDigitB(s[6]) && isDigitB(s[8]) && isDigitB(s[9]) &&
-		isDigitB(s[11]) && isDigitB(s[12]) && isDigitB(s[14]) && isDigitB(s[15]) &&
-		isDigitB(s[17]) && isDigitB(s[18])
 }
 
 func matchRFC3339T(msg string) (fastSpans, fastVerdict) {

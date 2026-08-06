@@ -185,6 +185,21 @@ func TestParse_JSON_PinoTextualBeatsNumeric(t *testing.T) {
 	assert.Equal(t, "debug", enriched.Severity)
 }
 
+// A gRPC status is 0-16; a negative number names nothing.
+func TestParse_JSON_NegativeGrpcStatusRejected(t *testing.T) {
+	enriched := Parse(`{"grpc_status_number":-5,"@timestamp":"2026-03-14T16:06:54Z"}`)
+	assert.Empty(t, enriched.Severity)
+}
+
+// A JVM-style payload puts words before the exception class; the class — the
+// last word before the ": " — is the type, not the leading "Exception".
+func TestParse_JSON_Exception_JavaThreadHeader(t *testing.T) {
+	enriched := Parse(`{"@x":"Exception in thread \"main\" java.lang.IllegalStateException: queue full\n\tat com.example.shop.Worker.run(Worker.java:44)"}`)
+	assert.Equal(t, "java.lang.IllegalStateException", enriched.ExceptionType)
+	assert.Equal(t, "queue full", enriched.ExceptionMessage)
+	assert.Equal(t, "\tat com.example.shop.Worker.run(Worker.java:44)", enriched.ExceptionStackTrace)
+}
+
 func TestParse_JSON_Exception(t *testing.T) {
 	enriched := Parse(`{"@t":"2026-03-14T09:26:53Z","@m":"Unhandled exception","@x":"Acme.Domain.OrderException: quantity must be positive\n   at Acme.Orders.Validate(Order o)\n   at Acme.Api.Handle(Request r)"}`)
 	assert.Equal(t, "Acme.Domain.OrderException", enriched.ExceptionType)
@@ -236,6 +251,47 @@ func TestParse_Logfmt_QuotedRFC3339(t *testing.T) {
 	enriched := Parse(`time="2026-03-14T08:03:05Z" level=debug msg="skipping endpoint web.example.com because owner id does not match"`)
 	assert.Equal(t, "debug", enriched.Severity)
 	assert.Equal(t, "2026-03-14 08:03:05 +0000 UTC", enriched.Time.String())
+}
+
+// The scan must keep going until the message is found too — the early exit
+// used to drop a msg= that followed the timestamp, level and both trace IDs.
+func TestParse_Logfmt_MessageAfterAllOtherSignals(t *testing.T) {
+	enriched := Parse(`ts=2026-03-14T09:26:53Z level=info trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7 msg="cache warmed"`)
+	assert.Equal(t, "cache warmed", enriched.Message)
+	assert.Equal(t, "info", enriched.Severity)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", enriched.TraceID)
+	assert.Equal(t, "00f067aa0ba902b7", enriched.SpanID)
+}
+
+func TestParse_Logfmt_TimestampKeys(t *testing.T) {
+	for _, key := range []string{"t", "ts", "time", "timestamp"} {
+		enriched := Parse(key + `=2026-03-14T09:26:53Z msg=x`)
+		assert.Equal(t, "2026-03-14 09:26:53 +0000 UTC", enriched.Time.String(), "key %s", key)
+	}
+}
+
+// Explicit trace_id/span_id keys name the record's own IDs and win over a
+// propagated traceparent wherever either appears — the same precedence the
+// JSON path applies (TestParse_JSON_Traceparent).
+func TestParse_Logfmt_TraceparentLosesToExplicitIDs(t *testing.T) {
+	const tp = "traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	for _, line := range []string{
+		`level=info trace_id=11111111111111111111111111111111 span_id=2222222222222222 ` + tp,
+		`level=info ` + tp + ` trace_id=11111111111111111111111111111111 span_id=2222222222222222`,
+	} {
+		enriched := Parse(line)
+		assert.Equal(t, "11111111111111111111111111111111", enriched.TraceID, "line %s", line)
+		assert.Equal(t, "2222222222222222", enriched.SpanID, "line %s", line)
+	}
+
+	// The traceparent fills whichever side no explicit key names.
+	enriched := Parse(`level=info trace_id=11111111111111111111111111111111 ` + tp)
+	assert.Equal(t, "11111111111111111111111111111111", enriched.TraceID)
+	assert.Equal(t, "00f067aa0ba902b7", enriched.SpanID)
+
+	// An invalid explicit value does not shadow a later valid one.
+	enriched = Parse(`level=info trace_id=not-a-trace-id trace_id=4bf92f3577b34da6a3ce929d0e0e4736`)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", enriched.TraceID)
 }
 
 func TestParse_KubernetesEvent_TypePattern(t *testing.T) {

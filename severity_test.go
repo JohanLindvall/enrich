@@ -82,7 +82,7 @@ func TestSeverityFromText(t *testing.T) {
 
 func TestHTTPStatusSeverity(t *testing.T) {
 	testCases := []struct {
-		code int64
+		code int
 		kind StatusKind
 		want string
 	}{
@@ -176,7 +176,7 @@ func TestPinoSeverity(t *testing.T) {
 	}
 }
 
-func TestGetRedisSeverityText(t *testing.T) {
+func TestRedisSeverity(t *testing.T) {
 	testCases := []struct {
 		in   string
 		want string
@@ -188,7 +188,7 @@ func TestGetRedisSeverityText(t *testing.T) {
 		{"!", ""},
 	}
 	for _, tc := range testCases {
-		assert.Equal(t, tc.want, getRedisSeverityText(tc.in), "redis level %q", tc.in)
+		assert.Equal(t, tc.want, redisSeverity(tc.in), "redis level %q", tc.in)
 	}
 }
 

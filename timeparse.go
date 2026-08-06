@@ -297,6 +297,22 @@ func parsePlainDateTime(s string) (time.Time, bool) {
 	return utcStamp(y, mo, d, hh, mi, ss, 0, 0), true
 }
 
+// inferYear supplies the year a klog or RFC3164 timestamp omits: the clock's,
+// stepped across a year boundary when the stamp's month and the clock's sit on
+// opposite sides of it. expandKlogTime and expandStampTime deliberately keep
+// their own copies of this logic — they are the oracles the differential
+// tests hold parseKlogTime and parseStampTime to, so they must not share code
+// with the fast paths they check.
+func inferYear(mo int, now time.Time) int {
+	year := now.Year()
+	if now.Month() == time.January && mo == 12 {
+		year-- // date probably refers to previous year
+	} else if now.Month() == time.December && mo == 1 {
+		year++ // date probably refers to next year
+	}
+	return year
+}
+
 // parseKlogTime parses a klog "MMDD hh:mm:ss[.dddddd]" timestamp directly,
 // replacing the expandKlogTime year-prefix + time.Parse round trip (which
 // allocated the prefixed string) for the canonical shapes. The year inference,
@@ -327,12 +343,7 @@ func parseKlogTime(s string, now time.Time) (time.Time, bool) {
 			return time.Time{}, false
 		}
 	}
-	year := now.Year()
-	if now.Month() == time.January && mo == 12 {
-		year-- // date probably refers to previous year
-	} else if now.Month() == time.December && mo == 1 {
-		year++ // date probably refers to next year
-	}
+	year := inferYear(mo, now)
 	if mo < 1 || mo > 12 || d < 1 || d > daysInMonth(mo, year) || !clockValid(hh, mi, ss) {
 		return time.Time{}, false
 	}
@@ -406,12 +417,7 @@ func parseStampTime(s string, now time.Time) (time.Time, bool) {
 	if !ok1 || !ok2 || !ok3 {
 		return time.Time{}, false
 	}
-	year := now.Year()
-	if now.Month() == time.January && mo == 12 {
-		year-- // date probably refers to previous year
-	} else if now.Month() == time.December && mo == 1 {
-		year++ // date probably refers to next year
-	}
+	year := inferYear(mo, now)
 	if d < 1 || d > daysInMonth(mo, year) || !clockValid(hh, mi, ss) {
 		return time.Time{}, false
 	}
