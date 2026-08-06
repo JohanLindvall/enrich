@@ -146,6 +146,11 @@ func TestValidGUIDMatchesSlow(t *testing.T) {
 			assert.Equal(t, slowValidGUID(s), validGUID(s), "guid %q", s)
 		}
 	}
+	// Non-36 lengths take the per-byte path; shapes whose dashes still sit at
+	// 8/13/18/23 with hex everywhere else reach its final "all checks passed".
+	for _, s := range []string{valid[:34], valid[:35], valid + "0", valid + "ff", "", "0123"} {
+		assert.Equal(t, slowValidGUID(s), validGUID(s), "guid %q", s)
+	}
 	rng := rand.New(rand.NewSource(10))
 	const chars = "0123456789abcdefABCDEF-g\x80"
 	buf := make([]byte, 0, 40)

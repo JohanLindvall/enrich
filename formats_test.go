@@ -29,6 +29,15 @@ func TestParse_Syslog_Notice_Info2(t *testing.T) {
 	assert.Equal(t, Info2LevelNo, enriched.SeverityNumber)
 }
 
+// A word shaped like a month that is not one still matches the RFC3164
+// regex; parseStampTime declines it, the year-prefix fallback then fails to
+// parse, and the time stays zero — the severity from the PRI survives.
+func TestParse_Syslog_RFC3164_NonMonthStamp(t *testing.T) {
+	enriched := Parse(`<11>Xyz 11 10:00:00 host app[42]: something failed`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.True(t, enriched.Time.IsZero())
+}
+
 func TestParse_Syslog_InvalidPri(t *testing.T) {
 	// A priority above 191 is not valid syslog.
 	enriched := Parse(`<999>not really syslog`)

@@ -185,6 +185,70 @@ func TestParse_JSON_PinoTextualBeatsNumeric(t *testing.T) {
 	assert.Equal(t, "debug", enriched.Severity)
 }
 
+// The lax decoder must tolerate structure it does not expect — wrong-typed
+// envelopes, unknown nesting, malformed embedded JSON — and still extract
+// what it can; truly malformed JSON falls through to the other strategies.
+func TestParse_JSON_LaxTolerance(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		line   string
+		format string
+		level  string
+	}{
+		{"unknown nesting is skipped", `{"arr":[true,null,{"x":[]}],"level":"info"}`, FormatJSON, "info"},
+		{"non-object properties", `{"properties":"not an object","level":"warn"}`, FormatJSON, "warn"},
+		{"non-numeric responseStatus code", `{"responseStatus":{"code":"200"},"level":"warn"}`, FormatJSON, "warn"},
+		{"broken embedded response", `{"properties":{"response":"{bad"},"level":"info"}`, FormatJSON, "info"},
+		{"null level", `{"level":null,"msg":null}`, FormatJSON, ""},
+		{"non-string embedded log", `{"log":123,"level":"warn"}`, FormatJSON, "warn"},
+		{"non-string properties log", `{"properties":{"log":123},"level":"warn"}`, FormatJSON, "warn"},
+		{"non-object responseStatus", `{"responseStatus":123,"level":"warn"}`, FormatJSON, "warn"},
+		{"non-object mongo date", `{"t":{"$date":[1]},"level":"warn"}`, FormatJSON, "warn"},
+		{"leading whitespace", `  {"level":"info"}`, FormatJSON, "info"},
+		{"truncated object", `{"level":"info"`, FormatNone, ""},
+		// The lax skipper does not re-validate a nested value it discards, so
+		// a syntax error confined to one envelope still lets later keys decode.
+		{"malformed nested envelope", `{"properties":{bad},"level":"info"}`, FormatJSON, "info"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enriched := Parse(tc.line)
+			assert.Equal(t, tc.format, enriched.Format)
+			assert.Equal(t, tc.level, enriched.Severity)
+		})
+	}
+
+	// A JSON "t" key is MongoDB's timestamp envelope, not a timestamp string:
+	// the logfmt t= spelling does not carry over to JSON.
+	enriched := Parse(`{"t":"2026-07-06T12:00:00Z","msg":"x"}`)
+	assert.Equal(t, FormatJSON, enriched.Format)
+	assert.True(t, enriched.Time.IsZero())
+
+	// An escaped message cannot alias the input; it is unescaped into a copy.
+	assert.Equal(t, "line1\nline2 A", Parse(`{"msg":"line1\nline2 A"}`).Message)
+}
+
+// Codes that are not HTTP statuses are ignored wherever they appear: a
+// negative or exponent-form response_code records neither code nor severity.
+func TestParse_JSON_NonHTTPResponseCodes(t *testing.T) {
+	for _, line := range []string{
+		`{"response_code":-200,"protocol":"HTTP/2"}`,
+		`{"response_code":2e2}`,
+	} {
+		enriched := Parse(line)
+		assert.Empty(t, enriched.Severity, "line %s", line)
+		assert.Zero(t, enriched.HTTPStatusCode, "line %s", line)
+	}
+}
+
+// An embedded access-log line's status code is lifted into the envelope's
+// result like the rest of its metadata.
+func TestParse_JSON_NestedHTTPStatusLifted(t *testing.T) {
+	enriched := Parse(`{"log":"203.0.113.7 - - [14/Mar/2026:06:42:27 +0000] \"GET / HTTP/1.1\" 404 13 \"\" \"probe/2.7\"\n","stream":"stdout"}`)
+	assert.Equal(t, 404, enriched.HTTPStatusCode)
+	assert.Equal(t, "warn", enriched.Severity)
+	assert.Equal(t, "2026-03-14 06:42:27 +0000 UTC", enriched.Time.String())
+}
+
 // A gRPC status is 0-16; a negative number names nothing.
 func TestParse_JSON_NegativeGrpcStatusRejected(t *testing.T) {
 	enriched := Parse(`{"grpc_status_number":-5,"@timestamp":"2026-03-14T16:06:54Z"}`)

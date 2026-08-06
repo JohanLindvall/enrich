@@ -113,6 +113,35 @@ func TestApplySubmatch_BadTime(t *testing.T) {
 	assert.False(t, r.TimeHasZone, "no time parsed, so nothing to report a zone for")
 }
 
+// requiredByte must prove nothing for shapes it cannot reason about: a
+// case-folded literal matches two bytes, an alternation guarantees neither
+// branch, an optional repeat may be absent, and an unparseable pattern
+// proves nothing at all. A wrongly proven byte would silently reject
+// matching lines, which TestRequiredByteNeverRejectsMatches would only catch
+// for shapes its corpus happens to contain.
+func TestRequiredByteUnprovableShapes(t *testing.T) {
+	assert.Equal(t, byte('='), requiredByte(`^level=x`), "sanity: mandatory literals do prove")
+	assert.Zero(t, requiredByte(`(?i)error`))
+	assert.Zero(t, requiredByte(`error|warn`))
+	assert.Zero(t, requiredByte(`x{0,3}`))
+	assert.Zero(t, requiredByte(`((`))
+}
+
+// byteScore's rarity ranking drives both gate derivations; pin the class
+// order: control < heavy punctuation < brackets < separators < digits <
+// uppercase < lowercase-and-space.
+func TestByteScoreClassOrder(t *testing.T) {
+	classes := [][]byte{
+		{'\t', '\n'}, {'|', '=', '<', '%'}, {'[', '"', '('},
+		{':', '-', '/'}, {'0', '9'}, {'A', 'Z'}, {'a', ' ', '.'},
+	}
+	for score, bytes := range classes {
+		for _, c := range bytes {
+			assert.Equal(t, score, byteScore(c), "byte %q", c)
+		}
+	}
+}
+
 // TestRareByteInContain pins the gate's correctness invariant: the rare byte
 // is always a byte of the contain needle, so needle-present implies
 // gate-passes and the gate can never reject a line the needle would accept.

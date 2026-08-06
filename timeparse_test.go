@@ -201,6 +201,8 @@ func TestParseGoStringTimeMatchesParseTime(t *testing.T) {
 		"2026-03-14 06:11:46.397 +0800 GMT+8", // GMT with suffix: not claimed, ParseTime decides
 		"2026-03-14 06:11:46.397 +0000 GMTT",  // GMT-prefixed 4-letter: parseTimeZone eats only "GMT"
 		"2026-03-14 06:11:46.397 +1100 GMTST", // GMT-prefixed 5-letter ending in T
+		"2026-03-14 06:11:46.397 +0000 UTCT",  // UTC-prefixed 4-letter: parse eats "UTC", fails on the rest
+		"2026-03-14 06:11:46.397 +0500 UTCDT", // UTC-prefixed 5-letter ending in T
 		"2026-03-14 06:11:46.397 +0200 MESZ",  // 4 letters not ending in T
 		"2026-03-14 06:11:46.397 +1000 ChST",  // lower-case special zone
 		"2026-03-14 06:11:46.397 +0000 UT",    // too short
@@ -250,6 +252,17 @@ func TestParseGoStringTimeMatchesParseTime(t *testing.T) {
 	} {
 		_, ok := parseGoStringTime([]byte(in))
 		assert.True(t, ok, "parseGoStringTime must claim %q", in)
+	}
+}
+
+// monthByName claims exact-case abbreviations only — anything else stays on
+// the time.Parse path, which folds case itself.
+func TestMonthByName(t *testing.T) {
+	for i, name := range []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"} {
+		assert.Equal(t, i+1, monthByName(name), name)
+	}
+	for _, bad := range []string{"", "jan", "JAN", "Xyz", "Janu"} {
+		assert.Zero(t, monthByName(bad), bad)
 	}
 }
 

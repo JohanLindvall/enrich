@@ -1,12 +1,15 @@
 package enrich
 
 import (
+	"fmt"
 	"math/rand"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSeverityFromNumber(t *testing.T) {
@@ -268,6 +271,70 @@ func TestSeverityLUTMatchesRegexes(t *testing.T) {
 			buf = append(buf, alphabet[rng.Intn(len(alphabet))])
 		}
 		check(string(buf))
+	}
+}
+
+// The perfect-hash table's collision guard is a maintainer safety net: a new
+// spelling whose hash lands on an occupied slot must panic at init with
+// replacement constants, never silently shadow an existing key. Rebuild the
+// table with a deliberately colliding spelling and check both halves of that
+// promise. The globals are snapshotted and restored; tests in this package
+// never run in parallel.
+func TestBuildSevTablePanicsOnCollision(t *testing.T) {
+	// Find a spelling that is not in the LUT but hashes onto an occupied slot.
+	used := map[uint32]bool{}
+	for key := range severityLUT {
+		used[sevHash(key)] = true
+	}
+	collider := ""
+search:
+	for a := byte('a'); a <= 'z'; a++ {
+		for b := byte('a'); b <= 'z'; b++ {
+			cand := string([]byte{a, b})
+			if _, exists := severityLUT[cand]; !exists && used[sevHash(cand)] {
+				collider = cand
+				break search
+			}
+		}
+	}
+	require.NotEmpty(t, collider, "no two-letter collider found; widen the search")
+
+	saved := sevTable
+	sevTable = [sevTableSize]sevSlot{}
+	severityLUT[collider] = struct {
+		text string
+		no   int
+	}{InfoLevel, InfoLevelNo}
+	defer func() {
+		delete(severityLUT, collider)
+		sevTable = saved
+		r := recover()
+		if assert.NotNil(t, r, "buildSevTable accepted a colliding spelling") {
+			msg := fmt.Sprint(r)
+			assert.Contains(t, msg, strconv.Quote(collider))
+			assert.Contains(t, msg, "sevHashLen=", "the panic must carry replacement constants")
+		}
+	}()
+	buildSevTable()
+	t.Fatal("unreachable: buildSevTable must panic")
+}
+
+// searchSevHash only ever runs on the collision panic path; hold it to its
+// promise anyway: the constants it prints must really be injective over the
+// current spellings, or the panic would hand a maintainer broken advice.
+func TestSearchSevHashFindsInjectiveConstants(t *testing.T) {
+	found := searchSevHash()
+	var a, b, c, size uint32
+	n, err := fmt.Sscanf(found, "sevHashLen=%d sevHashFirst=%d sevHashLast=%d sevTableSize=%d", &a, &b, &c, &size)
+	require.NoError(t, err, "searchSevHash returned %q", found)
+	require.Equal(t, 4, n)
+	seen := map[uint32]string{}
+	for k := range severityLUT {
+		h := (uint32(len(k))*a + uint32(k[0])*b + uint32(k[len(k)-1])*c) % size
+		if prev, dup := seen[h]; dup {
+			t.Fatalf("constants %q collide for %q and %q", found, prev, k)
+		}
+		seen[h] = k
 	}
 }
 
