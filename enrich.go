@@ -239,7 +239,8 @@ type Result struct {
 	TraceID string
 	SpanID  string
 
-	// Structured-log (Serilog-style) fields.
+	// Structured-log (Serilog-style) fields. Service and Product are
+	// normalized to lowercase.
 	Template      string
 	TemplateHash  string
 	SourceContext string
@@ -781,8 +782,8 @@ func (result *Result) applyMetadata(f *enrichFields) {
 	}
 	setIfSet(&result.EventCategory, f.EventCategory)
 	setIfSet(&result.Version, f.Version)
-	setIfSet(&result.Service, f.Service)
-	setIfSet(&result.Product, f.Product)
+	setIfSet(&result.Service, lower(f.Service))
+	setIfSet(&result.Product, lower(f.Product))
 
 	// @x carries type, message and stack trace in one payload; the ECS/OTel
 	// spellings carry them apart and are authoritative when present.

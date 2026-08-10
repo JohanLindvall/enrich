@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestParse_JSON_Serilog(t *testing.T) {
-	line := `{"@t":"2026-03-14T09:26:53.5Z","@l":"Warning","@m":"Order 42 rejected","@mt":"Order {Id} rejected","@i":"a1b2c3d4","@sn":"orders-api","@sv":"2.4.1","@sp":"acme-shop","SourceContext":"Acme.Orders.Validator","traceID":"aaaabbbbccccdddd0000111122223333","spanID":"0123456789abcdef"}`
+	line := `{"@t":"2026-03-14T09:26:53.5Z","@l":"Warning","@m":"Order 42 rejected","@mt":"Order {Id} rejected","@i":"a1b2c3d4","@sn":"Orders-API","@sv":"2.4.1","@sp":"Acme-Shop","SourceContext":"Acme.Orders.Validator","traceID":"aaaabbbbccccdddd0000111122223333","spanID":"0123456789abcdef"}`
 	enriched := Parse(line)
 	assert.Equal(t, line, enriched.Body)
 	assert.Equal(t, FormatJSON, enriched.Format)
