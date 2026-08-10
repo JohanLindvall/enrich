@@ -287,7 +287,11 @@ func removeDashesASCII(s string) string {
 			b = append(b, s[i])
 		}
 	}
-	return string(b)
+	// The buffer is built here and never mutated again, so hand out a view of
+	// it instead of paying string(b)'s second copy (dashed UUID request_ids —
+	// the common Envoy shape — otherwise cost 2 allocs per line). Same pattern
+	// as lower().
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
 // logfmtKeyStart marks the first bytes of the keys enrichFromLogFmt's switch
@@ -917,8 +921,14 @@ func (result *Result) parseException(exception string) {
 		// .NET puts parenthesized error codes between the type and the colon —
 		// "System.Net.Sockets.SocketException (00000005, 0xFFFDFFFF): ..." —
 		// so drop a parenthetical suffix before isolating the type word, or the
-		// last-word rule below would pick "0xFFFDFFFF)" as the type.
-		if paren := strings.Index(excType, " ("); paren >= 0 {
+		// last-word rule below would pick "0xFFFDFFFF)" as the type. Only a
+		// parenthetical that runs to the END of the head is a code suffix:
+		// Java thread names also contain " (" — 'Exception in thread "Thread-0
+		// (ActiveMQ-client-global-threads)" java.lang.IllegalStateException' —
+		// and cutting at the first " (" there would leave '"Thread-0' as the
+		// type. The suffix check keeps nested .NET parens right too:
+		// "HttpRequestException (Connection refused (localhost:5000))".
+		if paren := strings.Index(excType, " ("); paren >= 0 && excType[len(excType)-1] == ')' {
 			excType = excType[:paren]
 		}
 		// "Exception in thread "main" java.lang.IllegalStateException" and the

@@ -691,6 +691,18 @@ func TestParse_Logfmt_Message(t *testing.T) {
 	assert.Equal(t, "Liveness probe failed", enriched.Message)
 }
 
+func TestParse_TraceID_DashedRequestID(t *testing.T) {
+	// A dashed UUID request_id de-dashes to the 32-hex trace id; the returned string
+	// must be a stable, independent value (removeDashesASCII hands out a view of its
+	// build buffer — this pins that nothing later mutates it).
+	enriched := Parse(`{"request_id":"aabbccdd-1122-3344-5566-77889900aabb","response_code":200}`)
+	assert.Equal(t, "aabbccdd11223344556677889900aabb", enriched.TraceID)
+	clone := strings.Clone(enriched.TraceID)
+	enriched2 := Parse(`{"request_id":"ffffffff-ffff-ffff-ffff-ffffffffffff","response_code":200}`)
+	assert.Equal(t, "ffffffffffffffffffffffffffffffff", enriched2.TraceID)
+	assert.Equal(t, clone, enriched.TraceID, "an earlier result must not be mutated by a later parse")
+}
+
 func TestParse_TraceIDSpellings(t *testing.T) {
 	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	const spanID = "00f067aa0ba902b7"
@@ -953,6 +965,24 @@ func TestParse_JSON_ZeroCodeKeepsExplicitSeverity(t *testing.T) {
 	assert.Equal(t, "error", Parse(`{"level":"error","response_code":0,"protocol":"HTTP/2","response_flags":"DC"}`).Severity)
 	// With no level of its own, Envoy's TCP-proxy line is still info.
 	assert.Equal(t, "info", Parse(`{"response_code":0}`).Severity)
+}
+
+// ActiveMQ/Artemis really name threads "Thread-0 (ActiveMQ-client-global-threads)",
+// so the head contains " (" that is NOT a .NET code suffix. The parenthetical is only
+// stripped when it runs to the end of the head; here the last word before the ": " cut
+// is the type. Before the suffix check, this yielded ExceptionType == `"Thread-0`.
+func TestParse_JSON_Exception_JavaThreadNameWithParens(t *testing.T) {
+	enriched := Parse(`{"@x":"Exception in thread \"Thread-0 (ActiveMQ-client-global-threads)\" java.lang.IllegalStateException: Producer is closed\n\tat org.apache.activemq.artemis.core.client.impl.ClientProducerImpl.checkClosed(ClientProducerImpl.java:301)"}`)
+	assert.Equal(t, "java.lang.IllegalStateException", enriched.ExceptionType)
+	assert.Equal(t, "Producer is closed", enriched.ExceptionMessage)
+}
+
+func TestParse_Pattern_DotNetExceptionNestedParens(t *testing.T) {
+	// A nested parenthetical suffix still strips to the type: the cut happens at the
+	// FIRST " (" once the head is known to end with ')'.
+	enriched := Parse("Unhandled exception. System.Net.Http.HttpRequestException (Connection refused (localhost:5000)): Connection refused\n   at System.Net.Http.HttpConnectionPool.CreateConnectTunnelAsync(...)")
+	assert.Equal(t, "System.Net.Http.HttpRequestException", enriched.ExceptionType)
+	assert.Equal(t, "Connection refused", enriched.ExceptionMessage)
 }
 
 func TestParse_Pattern_DotNetExceptionWithErrorCodes(t *testing.T) {
