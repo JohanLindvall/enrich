@@ -954,3 +954,13 @@ func TestParse_JSON_ZeroCodeKeepsExplicitSeverity(t *testing.T) {
 	// With no level of its own, Envoy's TCP-proxy line is still info.
 	assert.Equal(t, "info", Parse(`{"response_code":0}`).Severity)
 }
+
+func TestParse_Pattern_DotNetExceptionWithErrorCodes(t *testing.T) {
+	// .NET socket/native exceptions carry parenthesized error codes between the
+	// type and the colon; the parenthetical must not be mistaken for the type.
+	enriched := Parse("Unhandled exception. System.Net.Sockets.SocketException (00000005, 0xFFFDFFFF): Name or service not known\n   at System.Net.Dns.GetHostEntryOrAddressesCore(String hostName)")
+	assert.Equal(t, "System.Net.Sockets.SocketException", enriched.ExceptionType)
+	assert.Equal(t, "Name or service not known", enriched.ExceptionMessage)
+	assert.Equal(t, "   at System.Net.Dns.GetHostEntryOrAddressesCore(String hostName)", enriched.ExceptionStackTrace)
+	assert.Equal(t, ErrorLevel, enriched.Severity)
+}

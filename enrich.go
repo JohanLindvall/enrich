@@ -913,6 +913,13 @@ func (result *Result) enrichFromPatterns(message string, memo *byteMemo) bool {
 func (result *Result) parseException(exception string) {
 	head, stack, hasStack := strings.Cut(exception, "\n")
 	if excType, message, ok := strings.Cut(head, ": "); ok {
+		// .NET puts parenthesized error codes between the type and the colon —
+		// "System.Net.Sockets.SocketException (00000005, 0xFFFDFFFF): ..." —
+		// so drop a parenthetical suffix before isolating the type word, or the
+		// last-word rule below would pick "0xFFFDFFFF)" as the type.
+		if paren := strings.Index(excType, " ("); paren >= 0 {
+			excType = excType[:paren]
+		}
 		// "Exception in thread "main" java.lang.IllegalStateException" and the
 		// like put words before the type; the type is the last of them, the
 		// one the ": " cut at.
