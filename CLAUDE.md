@@ -98,7 +98,7 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   message — a plain-text line's message is not separable from `Body`. The
   logfmt scan stores `msg=` even when it does *not* claim the line, so a
   key=value line the table resolves (a Kubernetes event) still gets one.
-- **`resourceGroup` is a hand scan, not a regexp**, because every match form
+- **`resourceGroupID` is a hand scan, not a regexp**, because every match form
   the regexp package offers allocates its result slice — that was one
   allocation on every Azure line, and the scan is also ~2x faster on the
   Azure benchmark. `enrich_test.go` keeps the original pattern as an oracle

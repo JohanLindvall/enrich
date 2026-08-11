@@ -74,7 +74,7 @@ func lowHex(c byte) bool {
 // opening quote, then the 55-byte version-traceid-spanid-flags value in
 // lowercase hex. It is the hand-scan replacement for the anchored regex this
 // package used here (kept as the oracle in enrich_test.go, the same pattern
-// as resourceGroup): the regex allocated its submatch slice on every hit, per
+// as resourceGroupID): the regex allocated its submatch slice on every hit, per
 // line on fleets that propagate W3C trace context. parseTraceparent supplies
 // the structural offsets and the all-zero rejection; the lowercase check is
 // what the regex's [0-9a-f] added on top of it.
@@ -108,15 +108,16 @@ func scanTraceparent(rest string) (traceID, spanID string) {
 	return parseTraceparent(v)
 }
 
-// resourceGroup extracts the "/subscriptions/<guid>/resourcegroups/<name>"
-// prefix of an Azure resource ID — the scope a caller groups by — and returns
-// "" when id carries no such prefix. id must already be lowercased.
+// resourceGroupID extracts the "/subscriptions/<guid>/resourcegroups/<name>"
+// prefix of an Azure resource ID — the group's own ARM resource ID, the scope
+// a caller groups by — and returns "" when id carries no such prefix. id must
+// already be lowercased.
 //
 // This was a regexp; the equivalent scan is here because every match form the
 // regexp package offers (FindStringIndex included) allocates its result slice,
 // which put an allocation on every Azure diagnostic line. enrich_test.go keeps
 // the original pattern as an oracle and differential-tests this against it.
-func resourceGroup(id string) string {
+func resourceGroupID(id string) string {
 	const subscriptions = "/subscriptions/"
 	const resourceGroups = "/resourcegroups/"
 	const guidLen = len("00000000-0000-0000-0000-000000000000")
@@ -150,7 +151,7 @@ func resourceGroup(id string) string {
 }
 
 // validGUID reports whether s is a dashed GUID: 8-4-4-4-12 hex digits. The
-// 36-byte shape (the only one resourceGroup asks about) is decided a word at
+// 36-byte shape (the only one resourceGroupID asks about) is decided a word at
 // a time: the dashes are checked directly, then XORed onto '0' ('-'^0x1d)
 // so the whole word can take the one hex8 test.
 func validGUID(s string) bool {
@@ -248,10 +249,12 @@ type Result struct {
 	Version       string
 	Product       string
 
-	// Azure resource metadata.
-	ResourceID    string
-	ResourceGroup string
-	EventCategory string
+	// Azure resource metadata. ResourceGroupID is the resource group's own
+	// full ARM resource ID ("/subscriptions/<guid>/resourcegroups/<name>"),
+	// not the bare group name.
+	ResourceID      string
+	ResourceGroupID string
+	EventCategory   string
 
 	// Exception details parsed from .NET-style exception payloads.
 	ExceptionType       string
@@ -782,7 +785,7 @@ func (result *Result) applyMetadata(f *enrichFields) {
 	setIfSet(&result.Template, f.Template)
 	if f.ResourceID != "" {
 		result.ResourceID = lower(f.ResourceID)
-		result.ResourceGroup = resourceGroup(result.ResourceID)
+		result.ResourceGroupID = resourceGroupID(result.ResourceID)
 	}
 	setIfSet(&result.EventCategory, f.EventCategory)
 	setIfSet(&result.Version, f.Version)

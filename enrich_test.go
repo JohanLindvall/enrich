@@ -85,14 +85,14 @@ func TestParse_JSON_TraceValidation(t *testing.T) {
 func TestParse_JSON_ResourceID(t *testing.T) {
 	enriched := Parse(`{"resourceId":"/SUBSCRIPTIONS/11111111-1111-1111-1111-111111111111/RESOURCEGROUPS/SHOP/PROVIDERS/MICROSOFT.WEB/SITES/ORDERS","eventCategory":"Administrative"}`)
 	assert.Equal(t, "/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/shop/providers/microsoft.web/sites/orders", enriched.ResourceID)
-	assert.Equal(t, "/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/shop", enriched.ResourceGroup)
+	assert.Equal(t, "/subscriptions/11111111-1111-1111-1111-111111111111/resourcegroups/shop", enriched.ResourceGroupID)
 	assert.Equal(t, "Administrative", enriched.EventCategory)
 }
 
 func TestParse_JSON_ResourceURIAlias(t *testing.T) {
 	enriched := Parse(`{"resourceUri":"/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/db/providers/Microsoft.Sql/servers/main"}`)
 	assert.Equal(t, "/subscriptions/22222222-2222-2222-2222-222222222222/resourcegroups/db/providers/microsoft.sql/servers/main", enriched.ResourceID)
-	assert.Equal(t, "/subscriptions/22222222-2222-2222-2222-222222222222/resourcegroups/db", enriched.ResourceGroup)
+	assert.Equal(t, "/subscriptions/22222222-2222-2222-2222-222222222222/resourcegroups/db", enriched.ResourceGroupID)
 }
 
 func TestParse_JSON_PropertiesLog(t *testing.T) {
@@ -855,7 +855,7 @@ func TestParse_JSON_PinoPrettyPrinted(t *testing.T) {
 	assert.Equal(t, "connection refused", enriched.Message)
 }
 
-// resourceGroupRE is the pattern resourceGroup replaced, kept as the oracle
+// resourceGroupRE is the pattern resourceGroupID replaced, kept as the oracle
 // for the hand-rolled scan that took its place (the regexp package allocates
 // its match slice, which put an allocation on every Azure line).
 var resourceGroupRE = regexp.MustCompile(`(?i)/subscriptions/[\da-f]{8}(-[\da-f]{4}){3}-[\da-f]{12}/resourcegroups/[^/]+`)
@@ -873,7 +873,7 @@ func regexResourceGroup(id string) string {
 func TestResourceGroupMatchesRegex(t *testing.T) {
 	check := func(id string) {
 		t.Helper()
-		assert.Equal(t, regexResourceGroup(id), resourceGroup(id), "resource id %q", id)
+		assert.Equal(t, regexResourceGroup(id), resourceGroupID(id), "resource id %q", id)
 	}
 
 	const guid = "11111111-2222-3333-4444-555555555555"

@@ -68,7 +68,7 @@ debug unparsed lines.
 | `HTTPStatusCode` | the status code the line reports, 0 if none |
 | `TraceID`, `SpanID` | whole identifiers only — see below |
 | `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context |
-| `ResourceID`, `ResourceGroup`, `EventCategory` | Azure resource metadata |
+| `ResourceID`, `ResourceGroupID`, `EventCategory` | Azure resource metadata (`ResourceGroupID` is the group's own full ARM resource ID, not its bare name) |
 | `ExceptionType`, `ExceptionMessage`, `ExceptionStackTrace` | from a Serilog `@x` payload, the ECS/OTel `error.*` keys, or a .NET unhandled-exception line |
 
 A trace ID is only taken from a value that *is* one — 32 hex digits (16 for a
