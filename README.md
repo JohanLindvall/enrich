@@ -163,6 +163,10 @@ with a nested `properties.log` payload, and ~197 ns for a 1 kB line that
 matches nothing (the table is skipped almost entirely via first-byte
 dispatch, positional gates, and memoized substring prefilters).
 
+A line carrying ANSI colour codes — what a logger writes when it thinks it is
+attached to a terminal — is stripped of them first, by a hand scan rather than
+a regexp, so a coloured stream costs about the same as an uncoloured one.
+
 Each of those figures includes one allocation: the 352-byte `Result`. The
 parsing itself allocates nothing — JSON and logfmt values alias the input
 rather than being copied — so reusing a `Result` runs the whole pipeline

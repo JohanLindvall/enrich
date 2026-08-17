@@ -72,6 +72,19 @@ func BenchmarkParseRFC3339Line(b *testing.B) {
 	}
 }
 
+// A console-formatted line with ANSI colour codes around the level and the
+// timestamp — what a logger writes when it thinks it is attached to a terminal.
+// Stripping them is the one place Parse rewrites the line before parsing it.
+var colouredLine = "\x1b[90m2026/07/11 10:00:00\x1b[0m \x1b[31m[error]\x1b[0m contacting upstream: connection refused"
+
+func BenchmarkParseColoured(b *testing.B) {
+	var r Result
+	for n := 0; n < b.N; n++ {
+		ParseInto(colouredLine, &r)
+	}
+	sink = &r
+}
+
 // The hot-loop shape: one reused Result, no per-line allocation at all.
 func BenchmarkParseIntoReused(b *testing.B) {
 	var r Result

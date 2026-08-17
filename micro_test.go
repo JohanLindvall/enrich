@@ -115,6 +115,38 @@ func TestScanTraceparentMatchesRegex(t *testing.T) {
 	}
 }
 
+// TestIndexAnchoredMatchesIndex pins the rare-byte-anchored scan to
+// strings.Index, over every anchor position of each needle the package uses
+// and a randomized haystack sweep built from the needles' own alphabets (so
+// near-misses and overlapping candidates are dense).
+func TestIndexAnchoredMatchesIndex(t *testing.T) {
+	needles := []string{traceparentKey, `"level":`, "ab", "aa", "x"}
+	haystacks := []string{
+		"", "x", "traceparent", "traceparent=00-", "xtraceparent", "tracepareny",
+		"tracepare", `{"a":1,"level":30}`, `{"level":"info"}`, `"lev"level":`,
+		"aaaaaa", "ababab", "abab", "traceparenttraceparent",
+	}
+	rng := rand.New(rand.NewSource(12))
+	const chars = "traceponx\"l:v01{}ab"
+	for i := 0; i < 20000; i++ {
+		b := make([]byte, rng.Intn(40))
+		for j := range b {
+			b[j] = chars[rng.Intn(len(chars))]
+		}
+		haystacks = append(haystacks, string(b))
+	}
+	for _, needle := range needles {
+		for anchor := 0; anchor < len(needle); anchor++ {
+			for _, s := range haystacks {
+				assert.Equal(t, strings.Index(s, needle), indexAnchored(s, needle, anchor),
+					"needle %q anchor %d haystack %q", needle, anchor, s)
+			}
+		}
+	}
+	// The constants the call sites pass must select the byte they document.
+	assert.Equal(t, byte('p'), traceparentKey[traceparentAnchor])
+}
+
 // slowValidGUID is the pre-SWAR per-byte implementation, as validGUID's
 // oracle.
 func slowValidGUID(s string) bool {
@@ -222,5 +254,52 @@ func TestSeverityInitialMask(t *testing.T) {
 		want := strings.IndexByte(severityInitials, folded) >= 0
 		got := folded-'a' <= 'z'-'a' && severityInitialMask&(1<<(folded-'a')) != 0
 		assert.Equal(t, want, got, "byte %#x", c)
+	}
+}
+
+// TestLogfmtKeyGate pins the first-byte-and-length gate to the spelling list it
+// is built from: every listed key must pass, and no other (byte, length) pair
+// may — the gate is what stands between a browser-telemetry line's fifty keys
+// and the switch.
+func TestLogfmtKeyGate(t *testing.T) {
+	pass := func(key string) bool {
+		return len(key) != 0 && logfmtKeyGate[key[0]]&(uint32(1)<<uint(len(key))) != 0
+	}
+	want := map[[2]int]bool{}
+	for _, k := range logfmtKeys {
+		want[[2]int{int(k[0]), len(k)}] = true
+		assert.True(t, pass(k), "listed key %q is gated out", k)
+	}
+	assert.False(t, pass(""), "the empty key must be gated out")
+	key := make([]byte, 40)
+	for c := 0; c < 256; c++ {
+		for n := 1; n <= len(key); n++ {
+			key[0] = byte(c)
+			for i := 1; i < n; i++ {
+				key[i] = 'x'
+			}
+			assert.Equal(t, want[[2]int{c, n}], pass(string(key[:n])), "byte %#x length %d", c, n)
+		}
+	}
+
+	// Every listed spelling must also BE a case in the switch: an entry the
+	// switch does not know is a probe every line carrying it pays for nothing.
+	for _, k := range logfmtKeys {
+		lower := strings.ToLower(k)
+		value := "info" // level, msg, message
+		switch {
+		case lower == "traceparent":
+			value = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+		case strings.Contains(lower, "span"):
+			value = "0123456789abcdef"
+		case strings.Contains(lower, "trace"):
+			value = "aaaabbbbccccdddd0000111122223333"
+		case lower == "t" || lower == "ts" || lower == "time" || lower == "timestamp":
+			value = "2026-07-11T10:00:00Z"
+		}
+		var r Result
+		var memo byteMemo
+		r.enrichFromLogFmt(k+"="+value+" other=1", &memo)
+		assert.NotEqual(t, Result{}, r, "key %q is listed but the switch ignores it", k)
 	}
 }

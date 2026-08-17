@@ -151,3 +151,54 @@ func TestLowerMatchesToLower(t *testing.T) {
 	in := "/subscriptions/x/resourcegroups/y"
 	assert.Same(t, unsafe.StringData(in), unsafe.StringData(lower(in)))
 }
+
+// slowStampSkeleton is the per-byte implementation stampSkeleton replaced,
+// kept as its oracle.
+func slowStampSkeleton(s string, dateSep, timeSep byte) bool {
+	if len(s) < 19 {
+		return false
+	}
+	return s[4] == dateSep && s[7] == dateSep && s[10] == timeSep && s[13] == ':' && s[16] == ':' &&
+		isDigitB(s[0]) && isDigitB(s[1]) && isDigitB(s[2]) && isDigitB(s[3]) &&
+		isDigitB(s[5]) && isDigitB(s[6]) && isDigitB(s[8]) && isDigitB(s[9]) &&
+		isDigitB(s[11]) && isDigitB(s[12]) && isDigitB(s[14]) && isDigitB(s[15]) &&
+		isDigitB(s[17]) && isDigitB(s[18])
+}
+
+// TestStampSkeletonMatchesSlow differential-tests the word-parallel skeleton
+// against that oracle: every single-byte corruption of a canonical stamp at
+// every position and value class, every prefix length, both separator pairs,
+// and a randomized sweep.
+func TestStampSkeletonMatchesSlow(t *testing.T) {
+	seps := [][2]byte{{'-', ' '}, {'/', ' '}, {'-', 'T'}, {':', ':'}}
+	check := func(s string) {
+		t.Helper()
+		for _, sep := range seps {
+			assert.Equal(t, slowStampSkeleton(s, sep[0], sep[1]), stampSkeleton(s, sep[0], sep[1]),
+				"stampSkeleton(%q, %q, %q)", s, sep[0], sep[1])
+		}
+	}
+	const valid = "2026-07-11 10:00:00"
+	for pos := 0; pos < len(valid); pos++ {
+		for _, c := range []byte{'0', '9', '/', '-', ':', ' ', 'T', 'a', '\t', '.', '\x00', 0x7f, 0x80, 0xc3, 0xff} {
+			b := []byte(valid)
+			b[pos] = c
+			check(string(b))
+		}
+	}
+	for n := 0; n <= len(valid); n++ {
+		check(valid[:n])
+	}
+	check(valid + " trailing")
+
+	rng := rand.New(rand.NewSource(4))
+	const chars = "0123456789-/:T. \t\x00\x80\xffaZ"
+	buf := make([]byte, 0, 24)
+	for i := 0; i < 200000; i++ {
+		buf = buf[:0]
+		for n := 17 + rng.Intn(6); n > 0; n-- {
+			buf = append(buf, chars[rng.Intn(len(chars))])
+		}
+		check(string(buf))
+	}
+}

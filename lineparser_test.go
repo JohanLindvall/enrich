@@ -155,31 +155,63 @@ func TestRareByteInContain(t *testing.T) {
 	}
 }
 
+// gateCorpus covers every timestamp family the positional gates distinguish,
+// plus the quoted, short and empty edge cases of the prefix windows.
+var gateCorpus = []string{
+	`2026/07/11 10:00:00 error contacting upstream`,
+	`2026/07/11 10:00:00.123456 message`,
+	`2026-07-11 10:00:00.123  WARN 1 --- [main] message`,
+	`2026-07-11 10:00:00,123 message`,
+	`2026-07-11T10:00:00.123Z info message`,
+	`2026-07-11T10:00:00+02:00 ERROR message`,
+	`"2026-07-11T10:00:00.123Z" message`,
+	`"2026-07-11 10:00:00.123 +02:00" [x] INFO: message`,
+	`2026-07-11 10:00:00 message`,
+	`2026-07`, `"2026`, `"`, `x`, ``,
+	"2026-07-11T10:00:0", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+}
+
 // TestPosGatesNeverRejectMatches pins the positional gates to their regexes:
 // on lines of every timestamp family (and quoted/short/empty edge cases), a
 // gated parser's gate may only reject lines its regex would reject anyway.
 func TestPosGatesNeverRejectMatches(t *testing.T) {
-	lines := []string{
-		`2026/07/11 10:00:00 error contacting upstream`,
-		`2026/07/11 10:00:00.123456 message`,
-		`2026-07-11 10:00:00.123  WARN 1 --- [main] message`,
-		`2026-07-11 10:00:00,123 message`,
-		`2026-07-11T10:00:00.123Z info message`,
-		`2026-07-11T10:00:00+02:00 ERROR message`,
-		`"2026-07-11T10:00:00.123Z" message`,
-		`"2026-07-11 10:00:00.123 +02:00" [x] INFO: message`,
-		`2026-07-11 10:00:00 message`,
-		`2026-07`, `"2026`, `x`, ``,
-	}
 	for _, clp := range compiledLineParsers {
-		if len(clp.gates) == 0 {
+		if clp.gateMask == 0 {
 			continue
 		}
-		for _, line := range lines {
+		for _, line := range gateCorpus {
 			if clp.re.MatchString(line) {
 				var r Result
-				assert.True(t, clp.apply(&r, line, new(byteMemo)), "gate rejected a matching line: re=%s line=%q", clp.re, line)
+				assert.True(t, clp.passes(lineGates(line)) && clp.apply(&r, line, new(byteMemo)),
+					"gate rejected a matching line: re=%s line=%q", clp.re, line)
 			}
+		}
+	}
+}
+
+// TestGateWordsMatchPosGates pins the masked-word gate test to the per-byte
+// posGate form it compiles from — the same oracle discipline the timestamp and
+// severity fast paths follow. lineParsers and compiledLineParsers are built in
+// one pass, so index i of each describes the same entry.
+func TestGateWordsMatchPosGates(t *testing.T) {
+	require.Equal(t, len(lineParsers), len(compiledLineParsers))
+	lines := append([]string{}, gateCorpus...)
+	lines = append(lines, fuzzCorpusLines(t)...)
+	for i, p := range lineParsers {
+		clp := compiledLineParsers[i]
+		quoted, gates := posGates(p.re)
+		for _, line := range lines {
+			off := 0
+			if quoted && len(line) > 0 && line[0] == '"' {
+				off = 1
+			}
+			want := true
+			for _, g := range gates {
+				if j := g.idx + off; j >= len(line) || line[j] != g.want {
+					want = false
+				}
+			}
+			assert.Equal(t, want, clp.passes(lineGates(line)), "re=%s line=%q", p.re, line)
 		}
 	}
 }
@@ -222,5 +254,36 @@ func TestRequiredByteNeverRejectsMatches(t *testing.T) {
 				assert.Contains(t, line, string(clp.req), "required byte %q rejects a matching line: re=%s line=%q", clp.req, clp.re, line)
 			}
 		}
+	}
+}
+
+// TestEveryNamedGroupIsApplied pins the table to applySubmatch: a named group
+// whose name the switch does not know is captured and then silently dropped,
+// which no test would otherwise notice. Extend both together.
+func TestEveryNamedGroupIsApplied(t *testing.T) {
+	known := map[string]bool{
+		"level": true, "time": true, "ktime": true, "stamptime": true,
+		"syslogtime": true, "sysloglevel": true, "syslogpri": true,
+		"response_code": true, "redis_level": true, "logaserror": true,
+		"unhandled": true,
+	}
+	for _, clp := range compiledLineParsers {
+		for _, name := range clp.names {
+			if name == "" {
+				continue
+			}
+			assert.True(t, known[name], "group %q in %s is captured but applySubmatch ignores it", name, clp.re)
+		}
+	}
+	// And the other way: a name the switch handles but the table never uses is
+	// dead code.
+	used := map[string]bool{}
+	for _, clp := range compiledLineParsers {
+		for _, name := range clp.names {
+			used[name] = true
+		}
+	}
+	for name := range known {
+		assert.True(t, used[name], "applySubmatch handles %q but no table entry captures it", name)
 	}
 }

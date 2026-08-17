@@ -1,6 +1,7 @@
 package enrich
 
 import (
+	"fmt"
 	"regexp"
 	"regexp/syntax"
 	"strconv"
@@ -15,19 +16,103 @@ type lineParser struct {
 }
 
 type compiledLineParser struct {
+	// The reject path comes first, so that deciding an entry cannot match
+	// touches one cache line: the positional gate, the hand matcher, then the
+	// byte prefilters.
+	gateMask uint64                                // a line passes the gate when its
+	gateWant uint64                                // gate window & gateMask == gateWant
+	fast     func(string) (fastSpans, fastVerdict) // hand matcher, or nil
+
 	contain     string
-	containByte byte   // contain when it is a single byte, for the memo
-	first       string // bytes the line must start with; empty means no cheap test
-	rare        byte   // rarest byte of contain (0: none); gates the substring scan
-	req         byte   // a byte every regex match must contain (0: none)
-	quoted      bool   // pattern allows one leading '"', shifting the gates by one
-	gates       []posGate
+	containByte byte // contain when it is a single byte, for the memo
+	rare        byte // rarest byte of contain (0: none); gates the substring scan
+	req         byte // a byte every regex match must contain (0: none)
+	quoted      bool // pattern allows a leading '"', shifting its gate by one
+
 	re          *regexp.Regexp
 	names       []string // re.SubexpNames(), hoisted out of the per-line loop
 	ts          []tsLayout
-	fastTS      func(string) (time.Time, bool)        // family parser for ts, or nil
-	fastTSZoned bool                                  // every layout fastTS covers carries a zone
-	fast        func(string) (fastSpans, fastVerdict) // hand matcher, or nil
+	fastTS      func(string) (time.Time, bool) // family parser for ts, or nil
+	fastTSZoned bool                           // every layout fastTS covers carries a zone
+}
+
+// passes reports whether the line's gate windows satisfy this entry's
+// positional gate: the wrong timestamp family is rejected by one masked word
+// compare, before the dispatch loop even calls apply. A gate may only reject
+// lines the regex rejects, so testing it first cannot change any verdict; an
+// entry with no gates has a zero mask, which every line passes.
+func (clp *compiledLineParser) passes(plain, quoted uint64) bool {
+	w := plain
+	if clp.quoted {
+		w = quoted
+	}
+	return w&clp.gateMask == clp.gateWant
+}
+
+// The eight-byte window the positional gates are tested in. Every gate the
+// table derives comes from an anchored timestamp prefix and names one of the
+// date separators or the date/time separator — bytes 4, 7 and 10 — so a single
+// word starting at byte 4 covers them all.
+const gateWindowStart, gateWindowLen = 4, 8
+
+// lineGates reads that window of the line twice: plain at its usual offset, and
+// quoted one byte later, where a `^"?` pattern's gates shift to when the line
+// really does open with a quote (a copy of plain when it does not). Deriving
+// them once per line turns every entry's positional gate into one AND and one
+// compare, where the posGate slice cost a length test, a bounds check and a
+// load per gate. They are two values rather than an array because indexing an
+// array by the entry's quoted flag made the compiler copy it to the stack on
+// every iteration of the dispatch loop.
+func lineGates(message string) (plain, quoted uint64) {
+	if len(message) < gateWindowStart+gateWindowLen+1 {
+		return lineGatesShort(message)
+	}
+	plain = le64(message, gateWindowStart)
+	// Unless the line really opens with a quote, the `"?` of a quoted pattern
+	// matched empty and its gates sit where every other pattern's do.
+	quoted = plain
+	if message[0] == '"' {
+		quoted = le64(message, gateWindowStart+1)
+	}
+	return plain, quoted
+}
+
+// lineGatesShort is lineGates for a line too short to load a whole word from,
+// zero-padding what is missing. No gate ever wants a NUL, so a padded position
+// can only fail the test — which is the right answer, since a line too short to
+// hold a gate's byte is too short to match the pattern that wants it.
+func lineGatesShort(message string) (plain, quoted uint64) {
+	plain = paddedWord(message, gateWindowStart)
+	quoted = plain
+	if len(message) > 0 && message[0] == '"' {
+		quoted = paddedWord(message, gateWindowStart+1)
+	}
+	return plain, quoted
+}
+
+// paddedWord assembles message[off:off+8] a byte at a time, in the byte order
+// le64 reads, leaving the bytes past the end zero.
+func paddedWord(message string, off int) (w uint64) {
+	for i := off; i < len(message) && i-off < gateWindowLen; i++ {
+		w |= uint64(message[i]) << (uint(i-off) * 8)
+	}
+	return w
+}
+
+// compileGates folds the derived posGates into the masked-word form apply
+// tests. A gate outside the window would silently stop being enforced, hence
+// the panic rather than a quiet fallback.
+func compileGates(gates []posGate) (mask, want uint64) {
+	for _, g := range gates {
+		if g.idx < gateWindowStart || g.idx >= gateWindowStart+gateWindowLen {
+			panic(fmt.Sprintf("enrich: positional gate at index %d is outside the gate window [%d,%d)",
+				g.idx, gateWindowStart, gateWindowStart+gateWindowLen))
+		}
+		shift := uint(g.idx-gateWindowStart) * 8
+		mask |= uint64(0xff) << shift
+		want |= uint64(g.want) << shift
+	}
+	return mask, want
 }
 
 // tsLayout is one timestamp layout plus the fact about it that its string does
@@ -161,25 +246,28 @@ func init() {
 		for i, layout := range p.ts {
 			ts[i] = tsLayout{layout: layout, zoned: layoutHasZone(layout)}
 		}
-		compiledLineParsers = append(compiledLineParsers, &compiledLineParser{
+		gateMask, gateWant := compileGates(gates)
+		clp := &compiledLineParser{
+			gateMask:    gateMask,
+			gateWant:    gateWant,
+			fast:        fastMatcherFor(p.re),
 			contain:     p.contain,
 			containByte: containByte,
-			first:       firstBytes(p.re),
 			rare:        rareByte(p.contain),
 			req:         req,
 			quoted:      quoted,
-			gates:       gates,
 			re:          re,
 			names:       re.SubexpNames(),
 			ts:          ts,
 			fastTS:      fastLayoutTime(p.ts),
 			fastTSZoned: allLayoutsHaveZone(p.ts),
-			fast:        fastMatcherFor(p.re),
-		})
-	}
-	for b := 0; b < 256; b++ {
-		for _, clp := range compiledLineParsers {
-			if clp.first == "" || strings.IndexByte(clp.first, byte(b)) >= 0 {
+		}
+		compiledLineParsers = append(compiledLineParsers, clp)
+		// The first-byte set is a dispatch input only, so it stays out of the
+		// parser and is inverted into the bucket table right here.
+		first := firstBytes(p.re)
+		for b := 0; b < 256; b++ {
+			if first == "" || strings.IndexByte(first, byte(b)) >= 0 {
 				parsersByFirstByte[b] = append(parsersByFirstByte[b], clp)
 			}
 		}
@@ -363,24 +451,10 @@ func firstBytes(re string) string {
 }
 
 // apply matches the parser against message and, on a match, fills result from
-// the named submatches. It reports whether the parser matched. memo dedupes
-// whole-line byte scans across entries (and the traceparent gate).
+// the named submatches. It reports whether the parser matched; the caller has
+// already cleared the positional gate (see passes). memo dedupes whole-line
+// byte scans across entries (and the traceparent gate).
 func (clp *compiledLineParser) apply(result *Result, message string, memo *byteMemo) bool {
-	// Positional gates first: two inline byte compares reject a wrong-family
-	// line more cheaply than even the hand matcher's call. A gate may only
-	// reject lines the regex rejects, so running it before the matcher cannot
-	// change the verdict.
-	if len(clp.gates) > 0 {
-		off := 0
-		if clp.quoted && len(message) > 0 && message[0] == '"' {
-			off = 1
-		}
-		for _, g := range clp.gates {
-			if i := g.idx + off; i >= len(message) || message[i] != g.want {
-				return false
-			}
-		}
-	}
 	if clp.fast != nil {
 		switch spans, v := clp.fast(message); v {
 		case fastNoMatch:

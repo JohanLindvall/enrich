@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -993,4 +994,56 @@ func TestParse_Pattern_DotNetExceptionWithErrorCodes(t *testing.T) {
 	assert.Equal(t, "Name or service not known", enriched.ExceptionMessage)
 	assert.Equal(t, "   at System.Net.Dns.GetHostEntryOrAddressesCore(String hostName)", enriched.ExceptionStackTrace)
 	assert.Equal(t, ErrorLevel, enriched.Severity)
+}
+
+// ansiRe is the pattern removeANSICodes replaced, kept as the oracle for the
+// hand-rolled scan that took its place.
+var ansiRe = regexp.MustCompile(`\x1b\[\d+(;\d+)*m`)
+
+func regexRemoveANSICodes(input string) string {
+	if strings.ContainsRune(input, ansiEscape) {
+		return ansiRe.ReplaceAllString(input, "")
+	}
+	return input
+}
+
+// TestRemoveANSICodesMatchesRegex differential-tests the scan against that
+// regex over coloured lines, malformed and partial sequences, and a randomized
+// sweep of the alphabet the pattern is built from.
+func TestRemoveANSICodesMatchesRegex(t *testing.T) {
+	check := func(in string) {
+		t.Helper()
+		assert.Equal(t, regexRemoveANSICodes(in), removeANSICodes(in), "input %q", in)
+	}
+	const esc = "\x1b"
+	for _, in := range []string{
+		"", "plain line", esc, esc + "[", esc + "[m", esc + "[31", esc + "[31;",
+		esc + "[31m", esc + "[0m", esc + "[1;31mERROR" + esc + "[0m message",
+		esc + "[38;5;208mwarn" + esc + "[0m x",
+		esc + "[31mred" + esc + "[31mred",
+		esc + "[31" + esc + "[0m", // an unterminated sequence followed by a good one
+		esc + "[31x", esc + "[;31m", esc + "[3 1m", esc + "]31m",
+		"tail" + esc + "[0m", esc + "[0mhead",
+		esc + esc + "[0m",
+		"a" + esc + "[1m" + esc + "[2m" + esc + "[3mb",
+		"\x1b[0m\x1b[0m\x1b[0m",
+	} {
+		check(in)
+	}
+	rng := rand.New(rand.NewSource(31))
+	const alphabet = "\x1b[;m0139x "
+	buf := make([]byte, 0, 40)
+	for i := 0; i < 200000; i++ {
+		buf = buf[:0]
+		for n := rng.Intn(24); n > 0; n-- {
+			buf = append(buf, alphabet[rng.Intn(len(alphabet))])
+		}
+		check(string(buf))
+	}
+
+	// The alias case: a line with nothing to strip must be returned as is.
+	in := "no escapes here"
+	assert.Same(t, unsafe.StringData(in), unsafe.StringData(removeANSICodes(in)))
+	in = "a lone \x1b escape"
+	assert.Same(t, unsafe.StringData(in), unsafe.StringData(removeANSICodes(in)))
 }

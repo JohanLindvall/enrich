@@ -2,7 +2,6 @@ package enrich
 
 import (
 	"encoding/json"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -89,11 +88,11 @@ func scanTraceparent(rest string) (traceID, spanID string) {
 	if i < len(rest) && rest[i] == '"' {
 		i++
 	}
-	if i+55 > len(rest) {
+	if i+traceparentValueLen > len(rest) {
 		return "", ""
 	}
-	v := rest[i : i+55]
-	for j := 0; j < 55; j++ {
+	v := rest[i : i+traceparentValueLen]
+	for j := 0; j < traceparentValueLen; j++ {
 		switch j {
 		case 2, 35, 52:
 			if v[j] != '-' {
@@ -271,13 +270,76 @@ func (result *Result) setTime(t time.Time, hasZone bool) {
 	result.TimeHasZone = hasZone
 }
 
-var ansiRe = regexp.MustCompile(`\x1b\[\d+(;\d+)*m`) // https://tforgione.fr/posts/ansi-escape-codes/
+// ansiEscape opens every ANSI escape sequence (https://tforgione.fr/posts/ansi-escape-codes/).
+const ansiEscape = 0x1b
 
-func removeANSICodes(input string) string {
-	if strings.ContainsRune(input, '\x1b') {
-		return ansiRe.ReplaceAllString(input, "")
+// ansiSeqLen returns the length of the SGR escape sequence at the start of s —
+// ESC '[' then digit groups separated by ';' then 'm' — or 0 when there is
+// none. Maximal munch is exact: a shortened digit run ends on a digit, which
+// neither ';' nor 'm' accepts.
+func ansiSeqLen(s string) int {
+	if len(s) < 2 || s[0] != ansiEscape || s[1] != '[' {
+		return 0
 	}
-	return input
+	for i := 2; ; {
+		start := i
+		for i < len(s) && isDigitB(s[i]) {
+			i++
+		}
+		if i == start || i == len(s) {
+			return 0 // \d+ needs a digit, and 'm' still has to arrive
+		}
+		switch s[i] {
+		case ';':
+			i++
+		case 'm':
+			return i + 1
+		default:
+			return 0
+		}
+	}
+}
+
+// removeANSICodes strips the SGR colour sequences a console-formatting logger
+// writes (zerolog's and logrus's text output colour the level, and the pattern
+// table has to see the line without them).
+//
+// This was `ansiRe.ReplaceAllString` behind a ContainsRune guard. The guard is
+// what matters for uncoloured lines and is still here; the hand scan is for the
+// coloured ones, where handing a whole line to the regexp engine cost more than
+// the rest of Parse put together. enrich_test.go keeps the pattern as the
+// oracle, as it does for resourceGroupID and the severity table.
+func removeANSICodes(input string) string {
+	i := strings.IndexByte(input, ansiEscape)
+	if i < 0 {
+		return input // no escape at all: the overwhelmingly common case
+	}
+	b := make([]byte, 0, len(input))
+	last := 0
+	for i >= 0 {
+		if n := ansiSeqLen(input[i:]); n > 0 {
+			b = append(b, input[last:i]...)
+			i += n
+			last = i
+		} else {
+			i++ // a lone ESC, or a sequence the pattern does not match
+		}
+		if i >= len(input) {
+			break
+		}
+		next := strings.IndexByte(input[i:], ansiEscape)
+		if next < 0 {
+			break
+		}
+		i += next
+	}
+	if last == 0 {
+		return input // an ESC, but no complete sequence: nothing to copy
+	}
+	// b is freshly heap-allocated and never written again, so the view is as
+	// immutable as any string (the same pattern as lower and removeDashesASCII).
+	b = append(b, input[last:]...)
+	return unsafeString(b)
 }
 
 func removeDashesASCII(s string) string {
@@ -297,24 +359,33 @@ func removeDashesASCII(s string) string {
 	return unsafe.String(unsafe.SliceData(b), len(b))
 }
 
-// logfmtKeyStart marks the first bytes of the keys enrichFromLogFmt's switch
-// inspects (t/ts/time/timestamp, level, msg/message, the trace/span/
-// traceparent spellings), both cases. The init list below mirrors the
-// switch's case clauses by hand — a new case whose key starts with a byte
-// missing here is silently never matched, so extend both together; the
+// logfmtKeys are the keys enrichFromLogFmt's switch inspects (t/ts/time/
+// timestamp, level, msg/message, the trace/span/traceparent spellings, both
+// cases). The list mirrors the switch's case clauses by hand — a new case
+// whose spelling is missing here is silently never matched, so extend both
+// together; TestLogfmtKeyGate pins the two against each other, and the
 // per-spelling tests (TestParse_TraceIDSpellings,
-// TestParse_Logfmt_TimestampKeys, TestParse_Logfmt_Message) are what catch a
-// miss. A key starting with any other byte is rejected with one load.
-var logfmtKeyStart [256]bool
+// TestParse_Logfmt_TimestampKeys, TestParse_Logfmt_Message) catch a miss end
+// to end.
+var logfmtKeys = []string{
+	"t", "ts", "time", "timestamp", "level", "msg", "message",
+	"traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id",
+	"spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id",
+	"traceparent",
+}
+
+// logfmtKeyGate holds, per first byte, the lengths those keys come in: bit L is
+// set when some key starts with that byte and is L bytes long. One load, one
+// shift and one mask reject a key on either count, which matters because the
+// first byte alone is a weak filter — a browser-telemetry line carries a dozen
+// session_attr_* keys, every one of which shares its 's' with the span-ID
+// spellings and only differs in length. A length of 32 or more shifts the bit
+// out of the word entirely, which Go defines as zero.
+var logfmtKeyGate [256]uint32
 
 func init() {
-	for _, k := range []string{
-		"t", "ts", "time", "timestamp", "level", "msg", "message",
-		"traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id",
-		"spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id",
-		"traceparent",
-	} {
-		logfmtKeyStart[k[0]] = true
+	for _, k := range logfmtKeys {
+		logfmtKeyGate[k[0]] |= 1 << len(k)
 	}
 }
 
@@ -324,7 +395,7 @@ func init() {
 func parseTraceparent(v string) (traceID, spanID string) {
 	// version(2)-traceid(32)-spanid(16)-flags(2), all hex: fixed offsets, so
 	// slice it directly instead of allocating a split.
-	if len(v) != 55 || v[2] != '-' || v[35] != '-' || v[52] != '-' {
+	if len(v) != traceparentValueLen || v[2] != '-' || v[35] != '-' || v[52] != '-' {
 		return "", ""
 	}
 	traceID, spanID = v[3:35], v[36:52]
@@ -360,10 +431,10 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
 	_ = logfmt.Iterate(buf, func(key, val []byte) bool {
 		// Every key the switch below knows starts with one of t/l/m/s (either
-		// case); one table load rejects the rest before the length-dispatched
-		// switch runs. A browser-telemetry line carries dozens of
-		// event_data_* keys per interesting one.
-		if len(key) == 0 || !logfmtKeyStart[key[0]] {
+		// case) and is at most eleven bytes; one table probe rejects the rest
+		// before the length-dispatched switch runs. A browser-telemetry line
+		// carries dozens of event_data_* keys per interesting one.
+		if len(key) == 0 || logfmtKeyGate[key[0]]&(uint32(1)<<uint(len(key))) == 0 {
 			return true
 		}
 		// val aliases message (or, for a bare key, a constant): both are
@@ -464,8 +535,12 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 // therefore retain the corresponding input strings; copy the fields you need if
 // you want the large input buffers to be collected sooner.
 func Parse(input string) *Result {
-	result := new(Result)
-	ParseInto(input, result)
+	// The allocation already yields zeroed memory, so the reset ParseInto opens
+	// with would be pure waste here — and not cheap waste: overwriting the
+	// Result's eighteen string headers takes a bulk write barrier whenever the
+	// collector is marking, which on a per-line allocator is most of the time.
+	result := &Result{Body: input}
+	fillResult(result)
 	return result
 }
 
@@ -502,6 +577,15 @@ func ParseBytes(input []byte, result *Result) bool {
 // memory with input.
 func ParseInto(input string, result *Result) bool {
 	*result = Result{Body: input}
+	return fillResult(result)
+}
+
+// fillResult is ParseInto's body for a Result holding nothing but its Body —
+// every caller has just allocated or just reset one. Splitting the reset off is
+// what lets Parse skip it; keeping it in ParseInto is what makes a reused
+// Result safe (TestParseInto_ResetsResult pins that).
+func fillResult(result *Result) bool {
+	input := result.Body
 	message := removeANSICodes(input)
 
 	// Only a line that opens an object can decode; checking that here keeps the
@@ -581,8 +665,8 @@ func (result *Result) applyJSON(f *enrichFields) {
 	// Docker json-file records carry the original line in a top-level "log"
 	// string; enrich it recursively, top-level scalars again winning.
 	if f.Log != "" {
-		var nested Result
-		ParseInto(f.Log, &nested)
+		nested := Result{Body: f.Log} // zeroed at declaration: no reset needed
+		fillResult(&nested)
 		result.mergeNested(&nested)
 	}
 
@@ -624,8 +708,8 @@ func (result *Result) applyJSON(f *enrichFields) {
 func (result *Result) applyProperties(p *enrichProperties) json.Number {
 	switch {
 	case p.Log != "":
-		var nested Result
-		ParseInto(p.Log, &nested)
+		nested := Result{Body: p.Log} // zeroed at declaration: no reset needed
+		fillResult(&nested)
 		result.mergeNested(&nested)
 	case p.Response != "":
 		var hr httpResponse
@@ -882,6 +966,20 @@ func (result *Result) applyResponseCode(f *enrichFields, responseCode json.Numbe
 	setHTTPResponseCode(result, code, StatusObserved)
 }
 
+// The W3C traceparent header enrichFromPatterns scans for. The scan anchors on
+// the key's 'p', far rarer in log prose than its leading 't' (see
+// indexAnchored).
+const (
+	traceparentKey    = "traceparent"
+	traceparentAnchor = 5
+	// version(2)-traceid(32)-spanid(16)-flags(2) plus three dashes.
+	traceparentValueLen = 55
+	// The shortest line a traceparent can be found in: the key, one separator
+	// byte, and the value. Anything shorter cannot match, which spares most
+	// plain-text lines the scan entirely.
+	minTraceparentLine = len(traceparentKey) + 1 + traceparentValueLen
+)
+
 // enrichFromPatterns fills the result from the first matching entry in the
 // compiled line-parser table (nginx, klog, redis, tracebacks, ...) and
 // reports whether any entry matched. A W3C traceparent anywhere in the line
@@ -891,21 +989,24 @@ func (result *Result) enrichFromPatterns(message string, memo *byteMemo) bool {
 	if message != "" {
 		// One index picks the parsers this line's first byte can start, in
 		// table (priority) order; the rest never run.
+		plain, quoted := lineGates(message)
 		for _, clp := range parsersByFirstByte[message[0]] {
-			if clp.apply(result, message, memo) {
+			if clp.passes(plain, quoted) && clp.apply(result, message, memo) {
 				matched = true
 				break
 			}
 		}
 	}
 
-	// scanTraceparent requires "traceparent[:=]", so a line with neither ':'
-	// nor '=' cannot match; both probes are memoized SIMD byte scans, far
-	// cheaper than the substring search on lines full of 't's. Like the regex
-	// it replaced, the scan gets one attempt, at the first occurrence.
-	if memo.has(message, '=') || memo.has(message, ':') {
-		if i := strings.Index(message, "traceparent"); i >= 0 {
-			if t, s := scanTraceparent(message[i+len("traceparent"):]); t != "" {
+	// scanTraceparent needs room for the key, a separator and the 55-byte
+	// value, and requires "traceparent[:=]" — so a line shorter than that, or
+	// carrying neither ':' nor '=', cannot match. The length test is free and
+	// covers most plain-text lines; the two byte probes are memoized SIMD
+	// scans, far cheaper than the substring search. Like the regex it replaced,
+	// the scan gets one attempt, at the first occurrence.
+	if len(message) >= minTraceparentLine && (memo.has(message, '=') || memo.has(message, ':')) {
+		if i := indexAnchored(message, traceparentKey, traceparentAnchor); i >= 0 {
+			if t, s := scanTraceparent(message[i+len(traceparentKey):]); t != "" {
 				result.TraceID, result.SpanID = t, s
 				matched = true
 			}

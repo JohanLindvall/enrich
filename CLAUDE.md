@@ -26,7 +26,18 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   parsers it can start (a lorem-ipsum miss tries 6 of 32), so **a new anchored
   shape needs a `firstBytes` case or it silently loses the skip**. Unanchored
   entries have no gate and land in every bucket, so they must carry a
-  `contain` prefilter.
+  `contain` prefilter or a hand matcher that pre-decides their prefix (nginx
+  has the matcher, everything else the needle).
+  `posGates` derives the fixed-position byte requirements of an anchored
+  timestamp prefix, and `compileGates` folds them into one masked word compare
+  against `lineGates`' eight-byte window at offset 4 — `clp.passes` is then a
+  single AND, run by the dispatch loop *before* it calls `apply`, so a
+  wrong-family entry costs neither a call nor a look inside the parser.
+  `compileGates` panics on a gate outside that window rather than quietly
+  dropping it, and `TestGateWordsMatchPosGates` differential-tests the word
+  form against the per-byte one. The gate windows are two `uint64` values, not
+  an array: indexing an array by the entry's `quoted` flag made the compiler
+  copy it to the stack on every iteration of the dispatch loop.
 - `severity.go` — severity normalization, numeric levels, HTTP/gRPC/syslog/
   redis code-to-severity mapping. `severityLUT` **is** the normalizer, not a
   cache in front of one: the set of level spellings is finite, so every input
@@ -41,9 +52,9 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   freshly searched replacement constants to paste in, so the two cannot
   drift.
 - `hex.go` — SWAR byte-classification helpers (`le64`, `laneRange`, `hex8`,
-  `hexRun`) behind `validTraceID`/`validSpanID`/`validGUID` and the ASCII
-  fast path of `lower`. Every formula is exact per lane (no cross-lane
-  borrow), unlike the find-first-stop masks in the logfmt package;
+  `hexRun`) behind `validTraceID`/`validSpanID`/`validGUID`, the ASCII fast
+  path of `lower`, and `stampSkeleton`. Every formula is exact per lane (no
+  cross-lane borrow), unlike the find-first-stop masks in the logfmt package;
   `hex_test.go` pins them to the per-byte originals.
 - `timeparse.go` — per-layout-family timestamp parsers (the sanctioned
   replacement for `time.Parse`, which fast-paths only the literal
@@ -55,16 +66,30 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   *and* asserts the canonical shapes are claimed, so a fast path can neither
   drift nor silently rot into always-missing. `parseGoStringTime` (the Go
   `time.Time.String()` shape browser-telemetry logfmt carries) fronts
-  `logfmt.ParseTime` the same way.
-- `fastmatch.go` — hand matchers for the hottest pattern-table entries and
-  the per-line `byteMemo`. A matcher returns a proven
+  `logfmt.ParseTime` the same way. Every family funnels through `utcStamp`,
+  which converts a *validated* date straight to Unix seconds
+  (`daysFromCivil`) instead of paying `time.Date`'s normalization and zone
+  lookup; `TestUtcStampMatchesTimeDate` pins it to `time.Date` over every
+  month end of years 0-9999, the leap-rule corners and a randomized sweep.
+  `parseStamp19` gets its structural check from `stampSkeleton` — the same one
+  the hand matchers use — so the fourteen digits are validated once, a word at
+  a time, and the extraction re-validates nothing.
+- `fastmatch.go` — hand matchers for the hottest pattern-table entries, the
+  per-line `byteMemo`, and `indexAnchored`. A matcher returns a proven
   `fastNoMatch`/`fastMatched` (with capture spans) or `fastUndecided`, which
   falls through to the regex; `fastMatcherFor` keys matchers on the *exact*
   pattern string, so editing an entry detaches its matcher instead of
   desynchronizing it. `fastmatch_test.go` pins every matcher to its regex
-  over the fuzz corpus plus mutation sweeps — extend it when adding one. The
+  over the fuzz corpus plus mutation sweeps, and asserts each one both decides
+  something and has its match side exercised — extend it when adding one. The
   memo dedupes whole-line `IndexByte` gate scans (each distinct byte scanned
   at most once per line) and is plain stack state, not a cache.
+  `indexAnchored` is `strings.Index` anchored on a *rare* byte of the needle
+  instead of its first: the package's needles lead with the commonest byte in
+  their haystack (the 't' of "traceparent" in prose, the '"' of `"level":` in
+  JSON), and `strings.Index` restarts an `IndexByte` at every one. It is only
+  for short needles — long ones keep `strings.Contains`, whose Rabin-Karp
+  fallback is the guard against hostile input.
 - `testdata/fuzz/FuzzParse/` — the corpus the fuzzer accumulated. `go test`
   replays every entry as a seed, so it is a regression suite; add to it by
   running the fuzzer and copying new finds out of `$(go env GOCACHE)/fuzz`.
@@ -107,7 +132,13 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
 - **`enrichFromLogFmt` runs before the pattern table** and also handles the
   level-only case; the table's logfmt-ish entries only see lines without
   `=` pairs. It scans the whole line (no early exit) so trace_id/span_id/
-  traceparent keys are found wherever they appear.
+  traceparent keys are found wherever they appear. Its callback rejects a key
+  it does not care about with one probe of `logfmtKeyGate`, which holds the
+  *lengths* the keys starting with each byte come in — the first byte alone is
+  a weak filter, since every `session_attr_*` key of a browser-telemetry line
+  shares its 's' with the span-ID spellings. `logfmtKeys` is the single list
+  the gate is built from and `TestLogfmtKeyGate` pins it against the switch in
+  both directions, so a new case and a new spelling cannot drift apart.
 - **klog timestamps carry no year** — `expandKlogTime` infers it and adjusts
   across year boundaries; the corresponding test skips the year.
 - **`Result.TimeHasZone` says whether `Time` is an instant or a wall clock.**
@@ -147,7 +178,23 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   `Result.Format` and a zero `Result.Time` instead. Don't reintroduce it.
 - **`ParseInto` must fully reset the Result** (`*result = Result{Body: input}`)
   — callers reuse one across lines, so any field left behind leaks into the
-  next line. Guarded by TestParseInto_ResetsResult.
+  next line. Guarded by TestParseInto_ResetsResult. The reset is *only* in
+  `ParseInto`: the shared body is `fillResult`, which assumes a Result holding
+  nothing but its `Body`, and `Parse` and the two nested-line parses go
+  straight there because their Result was just allocated (or declared) zeroed.
+  Clearing eighteen string headers in a heap Result is a bulk write barrier,
+  not a memset, so doing it twice was worth ~25 ns a line.
+- **`removeANSICodes` strips by hand, with `ansiRe` kept as the oracle**
+  (`TestRemoveANSICodesMatchesRegex`), the same arrangement as
+  `resourceGroupID`. Handing a coloured line to `regexp.ReplaceAllString` cost
+  ~1.1 µs and five allocations, several times the rest of Parse. The
+  `IndexByte` guard in front of it is what keeps uncoloured lines free, and it
+  runs on every line before any strategy: a colourised line has to be seen
+  without its escapes by `looksLikeJSONObject`, by the logfmt tokenizer and by
+  the pattern table alike, so this is not something to make lazy.
+- **The traceparent scan is gated on length as well as bytes.** A match needs
+  the key, a separator and the 55-byte value, so a line shorter than
+  `minTraceparentLine` cannot carry one — which is most plain-text lines.
 - **Every fast path is claim-or-fallback, pinned to an oracle.** The family
   timestamp parsers, the hand matchers, `scanTraceparent`, `lower`, the SWAR
   ID validators, `validGUID` and `jsonInt` each shadow a slower
@@ -196,6 +243,22 @@ miss −14%, geomean −24%. Benchmark A/B on this laptop is only meaningful
 interleaved on one machine state — the absolute numbers drift ~10% with
 thermals.)
 
+The absolute figures above predate the 2026-08 pass and are now conservative;
+re-run `make bench` on that machine to refresh them. That pass was measured on
+a Neoverse-N2 (arm64) by alternating two prebuilt test binaries, eight rounds
+each: **pattern −20%, miss −9%, RFC3339 line −9%, logfmt −3%, JSON −2.5%,
+dashed trace ID −2%, Azure unchanged; geomean −4%** over those. Separately,
+a coloured console line — until then by far the slowest shape in the package,
+because it went through `regexp.ReplaceAllString` — went from ~1280 ns and 6
+allocations to ~195 ns and 1 (`BenchmarkParseColoured`).
+
+`BenchmarkParseIntoReused` and `BenchmarkParseBytes` did not move at all, and
+that is the honest summary of where the remaining time is: with the `Result`
+allocation taken out of the picture, what is left of a JSON line is the
+generated decoder, and of a logfmt line `logfmt.Iterate`. Nearly all of this
+pass landed on the plain-text paths and on what `Parse` does around whichever
+strategy runs.
+
 **Adding a field to `Result` or `enrichFields` costs real time; adding a key
 spelling to an existing field does not.** Measured: the ~20 extra aliases
 (ECS dotted keys, `traceId`, `message`, ...) are free to within noise, while
@@ -220,12 +283,12 @@ trace ID, and the `[]int` of a pattern-table match.
 - A pattern-path entry only allocates when its regex actually runs: the
   `[]int` that `FindStringSubmatchIndex` returns scales with the
   capture-group count, which is why `nonCapturing` rewrites every unnamed
-  group to `(?:`. Five of the six hand-matched entries (fastmatch.go) skip
-  the regex and the alloc entirely on their shapes; the redis matcher only
-  pre-decides the miss side, so genuine redis lines still run their regex.
-  Entries without a matcher always pay it, so keep new table entries free of
-  unnamed capturing groups — and consider a matcher for a shape that will be
-  hot.
+  group to `(?:`. Seven of the nine hand-matched entries (fastmatch.go) skip
+  the regex and the alloc entirely on their shapes; the redis and nginx
+  matchers only pre-decide the miss side, so genuine lines of those shapes
+  still run their regex. Entries without a matcher always pay it, so keep new
+  table entries free of unnamed capturing groups — and consider a matcher for
+  a shape that will be hot.
 - Trace/span IDs are validated by hand (`validTraceID`/`validSpanID`), not by
   regex — the old regexes cost ~40% of the JSON path on a line carrying a
   request_id. Same reasoning retired `resourceGroupRE`.
@@ -234,8 +297,13 @@ trace ID, and the `[]int` of a pattern-table match.
   conversion copied `properties.response` on every Azure line.
 
 The pattern table is ordered roughly most-common-first; every entry needs
-either a `firstBytes` classifier match or a `contain` substring pre-filter
-(see the lineparser.go note above) — the miss path regressed 9x without them.
+either a `firstBytes` classifier match, a `contain` substring pre-filter or a
+prefix matcher (see the lineparser.go note above) — the miss path regressed 9x
+without them. What the miss path costs now is essentially the whole-line
+`IndexByte` scans that prove those prefilters absent: ~40% of it, four scans
+(the ANSI guard, `=`, `:`, `\n`) over a 1 kB line. Removing one is worth ~8%,
+which is why the nginx entry got a matcher; there is no rare byte left to
+merge the remaining four into.
 
 Parse's own overhead is now small: profiling the JSON and logfmt paths shows
 the time going to `logfmt.Iterate` and the generated lightning decoder, both
@@ -266,3 +334,23 @@ lines 1-2, and a miss executes none.
   rare byte common to the trace-key spellings to gate on, so proving absence
   costs as much as parsing. The full scan is already the cheapest correct
   option.
+- **Carrying the positional gate inline in the dispatch bucket** (a
+  `{mask, want, window, *compiledLineParser}` struct per entry instead of a
+  bare pointer). The idea was to spare a rejected entry the dependent load
+  into the parser; measured **+5%** on the miss and pattern benchmarks
+  instead, because 32-byte bucket entries move four times the memory through
+  the loop and the parsers are allocated consecutively anyway. The gate lives
+  on the parser; only the *test* is hoisted into the loop, which is where the
+  win was.
+- **A hand matcher for the http-echo entry**
+  (`^ymdSlash(Z:)?\s([^\s]+\s){2}"...`). Stepping over its two space-separated
+  tokens costs more than the memoized whole-line `"` probe it would replace —
+  ~17 ns against ~8 ns on a 65-byte line. A prefix matcher only pays off when
+  it replaces a scan the memo cannot share (nginx's `-`) or when it decides the
+  match side too (the bracketed-level and Lambda entries). Weigh new matchers
+  that way, not by "the regex is slow".
+- **Shrinking `Result` into the 320-byte size class.** It is 336 bytes, so
+  `Parse` allocates 352. Getting under 320 needs 16 bytes, and the only
+  candidates are the two `int` fields; narrowing both to `int32` (an API break)
+  saves 8 and lands at 328 — still the same size class. Not worth breaking the
+  API for nothing.

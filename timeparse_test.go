@@ -442,3 +442,50 @@ func TestFastTSWiredIntoTable(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, n, 10, "expected most table entries to carry a fast timestamp parser, got "+strconv.Itoa(n))
 }
+
+// TestUtcStampMatchesTimeDate pins the direct seconds computation to the
+// time.Date + Add composite it replaced, over every date the parsers can
+// produce: every month end of every year 0-9999, a dense day sweep, the leap
+// rules at every century boundary, and the zone offsets and fractions that ride
+// along with them.
+func TestUtcStampMatchesTimeDate(t *testing.T) {
+	oracle := func(y, mo, d, hh, mi, ss, ns, offset int) time.Time {
+		ts := time.Date(y, time.Month(mo), d, hh, mi, ss, ns, time.UTC)
+		if offset != 0 {
+			ts = ts.Add(-time.Duration(offset) * time.Second)
+		}
+		return ts
+	}
+	check := func(y, mo, d, hh, mi, ss, ns, offset int) {
+		t.Helper()
+		want := oracle(y, mo, d, hh, mi, ss, ns, offset)
+		got := utcStamp(y, mo, d, hh, mi, ss, ns, offset)
+		assert.Equal(t, want, got, "utcStamp(%d-%02d-%02d %02d:%02d:%02d.%09d %+d)", y, mo, d, hh, mi, ss, ns, offset)
+	}
+	// Every month boundary of every year the four-digit layouts admit.
+	for y := 0; y <= 9999; y++ {
+		for mo := 1; mo <= 12; mo++ {
+			check(y, mo, 1, 0, 0, 0, 0, 0)
+			check(y, mo, daysInMonth(mo, y), 23, 59, 59, 999999999, 0)
+		}
+	}
+	// Leap-rule corners: the century and 400-year exceptions.
+	for _, y := range []int{1900, 1996, 2000, 2024, 2100, 2400, 4, 100, 400} {
+		for d := 27; d <= daysInMonth(2, y); d++ {
+			check(y, 2, d, 12, 0, 0, 0, 0)
+		}
+	}
+	// The offsets zoneColon and the Go-string zone admit, at their extremes.
+	for _, offset := range []int{0, 3600, -3600, 19800, -19800, 24 * 3600, -(24*3600 + 60*60)} {
+		check(2026, 7, 11, 0, 0, 0, 0, offset)
+		check(2026, 1, 1, 0, 0, 0, 500000000, offset)
+		check(2026, 12, 31, 23, 59, 59, 999999999, offset)
+	}
+	rng := rand.New(rand.NewSource(21))
+	for i := 0; i < 200000; i++ {
+		y := rng.Intn(10000)
+		mo := 1 + rng.Intn(12)
+		d := 1 + rng.Intn(daysInMonth(mo, y))
+		check(y, mo, d, rng.Intn(24), rng.Intn(60), rng.Intn(60), rng.Intn(1e9), (rng.Intn(49)-24)*3600)
+	}
+}

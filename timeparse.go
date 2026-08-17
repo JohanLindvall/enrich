@@ -44,23 +44,25 @@ func clockValid(hh, mi, ss int) bool {
 	return hh < 24 && mi < 60 && ss < 60
 }
 
+// pair reads two ASCII digits at s[i] as a number. The caller has already
+// proven they are digits (stampSkeleton does it for all fourteen at once), so
+// unlike digits2 this does no validation.
+func pair(s string, i int) int {
+	return int(s[i]-'0')*10 + int(s[i+1]-'0')
+}
+
 // parseStamp19 parses the 19-byte core "YYYY<sep>MM<sep>DD HH:MM:SS" shared by
-// every numeric family, validating ranges exactly as time.Parse does.
+// every numeric family, validating ranges exactly as time.Parse does. The
+// structural check is stampSkeleton — the same one the hand matchers use, which
+// decides all fourteen digits and four separators a word at a time instead of a
+// branch at a time, and leaves nothing here to re-validate.
 func parseStamp19(s string, sep byte) (y, mo, d, hh, mi, ss int, ok bool) {
-	if len(s) < 19 || s[4] != sep || s[7] != sep || s[10] != ' ' || s[13] != ':' || s[16] != ':' {
+	if !stampSkeleton(s, sep, ' ') {
 		return 0, 0, 0, 0, 0, 0, false
 	}
-	c, ok1 := digits2(s, 0)
-	yy, ok2 := digits2(s, 2)
-	mo, ok3 := digits2(s, 5)
-	d, ok4 := digits2(s, 8)
-	hh, ok5 := digits2(s, 11)
-	mi, ok6 := digits2(s, 14)
-	ss, ok7 := digits2(s, 17)
-	if !ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 {
-		return 0, 0, 0, 0, 0, 0, false
-	}
-	y = c*100 + yy
+	y = pair(s, 0)*100 + pair(s, 2)
+	mo, d = pair(s, 5), pair(s, 8)
+	hh, mi, ss = pair(s, 11), pair(s, 14), pair(s, 17)
 	if mo < 1 || mo > 12 || d < 1 || d > daysInMonth(mo, y) || !clockValid(hh, mi, ss) {
 		return 0, 0, 0, 0, 0, 0, false
 	}
@@ -81,18 +83,16 @@ func fracSecond9(s string, i int) (ns, end int) {
 	for j < len(s) && '0' <= s[j] && s[j] <= '9' {
 		j++
 	}
-	digits := j - (i + 1)
-	if digits > 9 {
-		digits = 9
-	}
+	digits := min(j-(i+1), 9)
 	for k := i + 1; k < i+1+digits; k++ {
 		ns = ns*10 + int(s[k]-'0')
 	}
-	for ; digits < 9; digits++ {
-		ns *= 10
-	}
-	return ns, j
+	return ns * pow10[9-digits], j
 }
+
+// pow10 scales a fraction of n digits up to nanoseconds in one multiply, where
+// the shift-by-one loop it replaces ran up to eight times per timestamp.
+var pow10 = [10]int{1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9}
 
 // fracExactN parses a mandatory ".000"-style fraction of exactly n digits at
 // s[i:]. Like stdFracSecond0 it accepts ',' as the separator; unlike atoi it
@@ -108,10 +108,7 @@ func fracExactN(s string, i, n int) (ns, end int, ok bool) {
 		}
 		ns = ns*10 + int(c-'0')
 	}
-	for d := n; d < 9; d++ {
-		ns *= 10
-	}
-	return ns, i + 1 + n, true
+	return ns * pow10[9-n], i + 1 + n, true
 }
 
 // zoneColon parses a "±hh:mm" offset at s[i:], mirroring stdNumColonTZ,
@@ -134,16 +131,40 @@ func zoneColon(s string, i int) (offset, end int, ok bool) {
 	return offset, i + 6, true
 }
 
+// daysFromCivil converts a Gregorian date to days since 1970-01-01, by the
+// shift-the-year-to-March algorithm: with March as month 0 the leap day lands
+// at the end of the year, so the day-of-year is one affine expression and the
+// only division work left is the 400/100/4 century rule. time.Date reaches the
+// same number through norm() calls and a table lookup; this is the same
+// arithmetic with the parts a validated date does not need removed.
+func daysFromCivil(y, mo, d int) int64 {
+	if mo <= 2 {
+		y--
+	}
+	era := y / 400
+	if y < 0 {
+		era = (y - 399) / 400
+	}
+	yoe := y - era*400 // [0, 399]
+	mp := mo - 3
+	if mo <= 2 {
+		mp = mo + 9 // March-based month index
+	}
+	doy := (153*mp+2)/5 + d - 1            // [0, 365]
+	doe := yoe*365 + yoe/4 - yoe/100 + doy // [0, 146096]
+	return int64(era)*146097 + int64(doe) - 719468
+}
+
 // utcStamp assembles the parsed fields into the time value the layout loop
 // would return: the instant of the wall clock minus the zone offset, in UTC —
 // which is also what parse's FixedZone tail resolves to once the caller's
-// .UTC() discards the fabricated location.
+// .UTC() discards the fabricated location. The fields are already range-checked
+// by the time they get here, so the seconds are computed directly rather than
+// through time.Date's normalization and zone lookup; timeparse_test.go pins
+// this to time.Date.
 func utcStamp(y, mo, d, hh, mi, ss, ns, offset int) time.Time {
-	t := time.Date(y, time.Month(mo), d, hh, mi, ss, ns, time.UTC)
-	if offset != 0 {
-		t = t.Add(-time.Duration(offset) * time.Second)
-	}
-	return t
+	sec := daysFromCivil(y, mo, d)*86400 + int64(hh*3600+mi*60+ss-offset)
+	return time.Unix(sec, int64(ns)).UTC()
 }
 
 // zoneTokens are the reference-layout elements that carry a zone: the numeric

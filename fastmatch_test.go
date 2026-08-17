@@ -85,6 +85,34 @@ func TestFastMatchersMatchRegex(t *testing.T) {
 		"2026-07-11T10:00:00Z\xc2\xa0info x",
 		"2026-07-11T10:00:00Z \xc3\x89RROR x",
 	)
+	inputs = append(inputs,
+		// Bracketed-level, nginx and Lambda shapes: the entries the table tries
+		// BEFORE the generic ones, two of whose matchers only pre-decide their
+		// own prefix. The http-echo lines exercise the entry that has none.
+		"2026/07/11 10:00:00 [error] worker process exited",
+		"2026/07/11 10:00:00.123 [Warn] x", "2026/07/11 10:00:00 [] x",
+		"2026/07/11 10:00:00 [error x", "2026/07/11 10:00:00 [err0r] x",
+		"2026/07/11 10:00:00\t[error] x", "2026/07/11 10:00:00  [error] x",
+		"2026/07/11 10:00:00 [\xc3\xa9rror] x",
+		`2026/07/11 10:00:00 GET / "curl/8" 200 12`,
+		`2026/07/11 10:00:00Z: GET / "curl/8" 200 12`,
+		`2026/07/11 10:00:00 GET "curl/8" 200 12`, `2026/07/11 10:00:00 GET / curl 200`,
+		`2026/07/11 10:00:00 GET  / "curl/8" 200 12`, `2026/07/11 10:00:00 a b"c" 1 `,
+		`203.0.113.1 - - [11/Jul/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612`,
+		`203.0.113.1 - user [11/Jul/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612`,
+		`203.0.113.1 -- [x] "GET" 200 `, `203.0.113.1 - `, ` - - [x] "y" 200 `,
+		`-203.0.113.1 - - [x] "y" 200 `, `[203.0.113.1] - - [x] "y" 200 `,
+		"203.0.113.1\t-\t- [x] \"y\" 200 ", "203.0.113.1 -\t- [x] \"y\" 200 ",
+		"2026-07-11T10:00:00.123Z\t11111111-2222-3333-4444-555555555555\tERROR\tboom",
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-555555555555\tINFO\tx",
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-55555555555\tINFO\tx",   // 35
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-5555555555555\tINFO\tx", // 37
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-55555555555g\tINFO\tx",
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-555555555555\tInfo\tx",
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-555555555555\t\tx",
+		"2026-07-11T10:00:00Z\t11111111-2222-3333-4444-555555555555\tINFO x",
+		`"2026-07-11T10:00:00Z"`+"\t11111111-2222-3333-4444-555555555555\tINFO\tx",
+	)
 	rng := rand.New(rand.NewSource(7))
 	seeds := []string{
 		"2026/07/11 10:00:00.123456 message",
@@ -94,8 +122,12 @@ func TestFastMatchersMatchRegex(t *testing.T) {
 		"2026-07-11T10:00:00.123Z info message",
 		`"2026-07-11 10:00:00.5Z" WARN x`,
 		"2026-07-11T10:00:00+02:00 ERROR x",
+		"2026/07/11 10:00:00 [error] worker exited",
+		`2026/07/11 10:00:00 GET / "curl/8" 200 12`,
+		`203.0.113.1 - - [11/Jul/2026:10:00:00 +0000] "GET / HTTP/1.1" 200 612`,
+		"2026-07-11T10:00:00.123Z\t11111111-2222-3333-4444-555555555555\tERROR\tboom",
 	}
-	const chars = "0123456789/:-.,+ TZXCSMabz\"eEiIrRoO\t\n\v\f\r\x80\xff\xc3\xa9"
+	const chars = "0123456789/:-.,+ TZXCSMabz\"eEiIrRoO[]GET\t\n\v\f\r\x80\xff\xc3\xa9"
 	for i := 0; i < 40000; i++ {
 		s := []byte(seeds[rng.Intn(len(seeds))])
 		for n := 1 + rng.Intn(3); n > 0; n-- {
@@ -125,8 +157,15 @@ func TestFastMatchersMatchRegex(t *testing.T) {
 			continue
 		}
 		covered++
+		var decided, matchedRE int
 		for _, in := range inputs {
 			spans, v := clp.fast(in)
+			if v != fastUndecided {
+				decided++
+			}
+			if clp.re.MatchString(in) {
+				matchedRE++
+			}
 			if v == fastUndecided {
 				continue
 			}
@@ -149,9 +188,14 @@ func TestFastMatchersMatchRegex(t *testing.T) {
 				}
 			}
 		}
+		// Agreement alone is satisfied by a matcher that has rotted into
+		// always-fastUndecided (correct, but doing no work) or that no input
+		// reaches. Both would make every assertion above vacuous.
+		assert.NotZero(t, decided, "matcher never decides anything: re=%s", clp.re)
+		assert.NotZero(t, matchedRE, "no input exercises the match side: re=%s", clp.re)
 	}
-	// The table must actually carry the matchers (all six shapes present).
-	assert.Equal(t, 6, covered, "expected exactly the six hand-matched entries")
+	// The table must actually carry the matchers (all nine shapes present).
+	assert.Equal(t, 9, covered, "expected exactly the nine hand-matched entries")
 }
 
 // TestByteMemo pins the memo to strings.IndexByte over every byte value.

@@ -321,8 +321,11 @@ func syslogSeverity(level int) (string, int) {
 // textual severity was found. An escaped quote cannot produce a false match:
 // the bytes of \"level\": contain a backslash before the colon.
 func pinoSeverity(message string) string {
-	const key = `"level":`
-	i := strings.Index(message, key)
+	// The scan anchors on the 'v', not on the leading quote: a quote opens
+	// every key and every string value of a JSON line, so strings.Index would
+	// restart at dozens of candidates per line to find one key.
+	const key, anchor = `"level":`, 3
+	i := indexAnchored(message, key, anchor)
 	if i < 0 {
 		return ""
 	}
