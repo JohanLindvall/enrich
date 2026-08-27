@@ -48,9 +48,12 @@ go get github.com/JohanLindvall/enrich
    correlation IDs (`trace_id`/`span_id` spellings and W3C `traceparent`).
 3. **Pattern table** — regular expressions covering common plain-text formats:
    nginx and Apache access/error logs, klog, redis, syslog (RFC3164, RFC5424,
-   and librdkafka's `<N>|` prefix), AWS Lambda, Spring Boot, Python logging,
-   Go panics, .NET unhandled exceptions, Python tracebacks, and Java
-   exceptions.
+   and librdkafka's `<N>|` prefix), AWS Lambda, Spring Boot, Python logging
+   (both the `asctime - name - LEVEL` style and `basicConfig`'s
+   `LEVEL:name:message` default), the .NET console formatter's
+   `info: Category[0]` header, Azure DevOps and GitHub Actions agent lines,
+   `date(1)`-stamped shell output, Go panics, .NET unhandled exceptions,
+   Python tracebacks, and Java exceptions.
 
 `Result.Format` reports which strategy matched (`json`, `logfmt`, `pattern`,
 or empty for none), so callers can export enrichment hit-rate metrics and
@@ -62,12 +65,12 @@ debug unparsed lines.
 |---|---|
 | `Body`, `Format` | the input line, and the strategy that parsed it |
 | `Time` | always UTC; a timestamp with no offset is read as UTC, and a format with no year (klog, syslog RFC3164) infers it from the clock |
-| `TimeHasZone` | whether the timestamp stated its own offset (RFC3339, an epoch, any zoned layout) or was a bare wall clock read as UTC — what a caller holding a runtime's own ingest time needs to know before preferring the line's |
+| `TimeHasZone` | whether the timestamp stated its own offset (RFC3339, an epoch, any layout carrying a numeric offset or a literal `UTC`/`GMT`) or was a bare wall clock read as UTC — what a caller holding a runtime's own ingest time needs to know before preferring the line's |
 | `Severity`, `SeverityNumber` | normalized level and its OTLP severity number |
 | `Message` | the message without its envelope (JSON/logfmt only — a plain-text line's message is not separable from `Body`) |
 | `HTTPStatusCode` | the status code the line reports, 0 if none |
 | `TraceID`, `SpanID` | whole identifiers only — see below |
-| `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context |
+| `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context (`SourceContext` also carries the logger/category name of a Python `basicConfig` or .NET console-formatter line) |
 | `ResourceID`, `ResourceGroupID`, `EventCategory` | Azure resource metadata (`ResourceGroupID` is the group's own full ARM resource ID, not its bare name) |
 | `ExceptionType`, `ExceptionMessage`, `ExceptionStackTrace` | from a Serilog `@x` payload, the ECS/OTel `error.*` keys, or a .NET unhandled-exception line |
 
@@ -94,13 +97,24 @@ and can be preferred however far apart the two are, while a zone-less one is a
 wall clock in an unknown zone, and the ingest time is usually closer to the
 truth than a stamp that may be hours out.
 
+One shape gets there by an unusual route. A `date(1)` line names its zone as
+an abbreviation, and Go's `MST` layout token resolves an abbreviation against
+the *host's* zone database — `Wed Aug 26 22:26:14 CEST 2026` parses to
+`20:26:14Z` where `TZ=Europe/Stockholm` and to `22:26:14Z` everywhere else, and
+a name the host does not know silently becomes offset zero. So the entry does
+not use that token: it accepts only `UTC` and `GMT`, matched as literal text.
+That is offset zero on any host, and any other zone name is declined rather
+than misread — which is what lets these lines count as zoned. A layout whose
+only zone element *is* the `MST` token would not, and `layoutHasZone` says so.
+
 ## Severity
 
 Severities normalize to `trace`, `debug`, `info`, `warn`, `error`, `fatal`.
 `SeverityFromText` maps any spelling in the wild ("WRN", "Warning", "w",
 "Information", Serilog's "VRB", syslog's "notice"/"alert"/"emerg",
-java.util.logging's "SEVERE"/"FINE"/"FINEST") to a canonical level plus its
-OpenTelemetry severity number; `SeverityFromNumber` is the inverse.
+java.util.logging's "SEVERE"/"FINE"/"FINEST", the .NET console formatter's
+"trce"/"dbug"/"fail") to a canonical level plus its OpenTelemetry severity
+number; `SeverityFromNumber` is the inverse.
 
 The numbers give each level a range of four, which is where the grading the
 six names flatten away is kept: syslog's *notice* is an info with

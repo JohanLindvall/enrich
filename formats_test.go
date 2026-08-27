@@ -81,6 +81,88 @@ func TestParse_PythonLogging(t *testing.T) {
 	assert.Equal(t, "2026-07-06 12:00:00.123 +0000 UTC", enriched.Time.String())
 }
 
+// Python's logging.basicConfig default format is
+// "%(levelname)s:%(name)s:%(message)s" — no timestamp, and the logger name
+// between two colons.
+func TestParse_PythonBasicConfig(t *testing.T) {
+	enriched := Parse(`WARNING:__main__:Downloaded file base/azure/actual/2026-08-01.csv`)
+	assert.Equal(t, "warn", enriched.Severity)
+	assert.Equal(t, WarnLevelNo, enriched.SeverityNumber)
+	assert.Equal(t, "__main__", enriched.SourceContext)
+	assert.Equal(t, FormatPattern, enriched.Format)
+
+	enriched = Parse(`CRITICAL:urllib3.connectionpool:connection pool is full`)
+	assert.Equal(t, "fatal", enriched.Severity)
+	assert.Equal(t, "urllib3.connectionpool", enriched.SourceContext)
+
+	// The same entry still covers the bare "LEVEL: message" form, which
+	// carries no logger name — the group must simply not participate.
+	enriched = Parse(`WARNING: You may want to use 'az acr login -n acme --expose-token'`)
+	assert.Equal(t, "warn", enriched.Severity)
+	assert.Empty(t, enriched.SourceContext)
+
+	enriched = Parse(`ERROR: connection refused`)
+	assert.Equal(t, "error", enriched.Severity)
+	assert.Empty(t, enriched.SourceContext)
+}
+
+// Microsoft.Extensions.Logging's console formatter: a "<level>: <Category>
+// [<EventId>]" header line, with the message indented on the line after it.
+func TestParse_DotNetConsoleFormatter(t *testing.T) {
+	for _, tc := range []struct {
+		line  string
+		level string
+		no    int
+	}{
+		{"trce: Acme.Api.Router[0]", TraceLevel, TraceLevelNo},
+		{"dbug: Acme.Api.Router[0]", DebugLevel, DebugLevelNo},
+		{"info: Acme.Api.Router[0]", InfoLevel, InfoLevelNo},
+		{"warn: Acme.Api.Router[0]", WarnLevel, WarnLevelNo},
+		{"fail: Acme.Api.Router[0]", ErrorLevel, ErrorLevelNo},
+		{"crit: Acme.Api.Router[0]", FatalLevel, FatalLevelNo},
+	} {
+		enriched := Parse(tc.line)
+		assert.Equal(t, tc.level, enriched.Severity, tc.line)
+		assert.Equal(t, tc.no, enriched.SeverityNumber, tc.line)
+		assert.Equal(t, "Acme.Api.Router", enriched.SourceContext, tc.line)
+		assert.Equal(t, FormatPattern, enriched.Format, tc.line)
+	}
+
+	// A collector that keeps the whole record together hands over the header
+	// and the indented message as one line.
+	enriched := Parse("info: Acme.Snapshot.Builder[0]\n      Source fingerprint 0000000000000000 over 271 blobs")
+	assert.Equal(t, "info", enriched.Severity)
+	assert.Equal(t, "Acme.Snapshot.Builder", enriched.SourceContext)
+
+	// The bracketed event ID is what makes the shape recognizable; without it
+	// an "info: " prefix is just prose.
+	for _, line := range []string{
+		"info: not this format",
+		"info: it[0] and then more text",
+		"note: Acme.Api.Router[0]",
+	} {
+		assert.Empty(t, Parse(line).Severity, line)
+		assert.Empty(t, Parse(line).SourceContext, line)
+	}
+}
+
+// date(1) output, the prefix a shell script's log lines carry.
+func TestParse_DateCommandPrefix(t *testing.T) {
+	enriched := Parse(`Wed Aug 26 22:26:14 UTC 2026: Datasource is healthy`)
+	assert.Equal(t, "2026-08-26 22:26:14 +0000 UTC", enriched.Time.String())
+	assert.Equal(t, FormatPattern, enriched.Format)
+
+	// %e space-pads a single-digit day, and GMT is the other zero-offset
+	// spelling.
+	enriched = Parse(`Thu Aug  6 02:06:14 GMT 2026: nightly run finished`)
+	assert.Equal(t, "2026-08-06 02:06:14 +0000 UTC", enriched.Time.String())
+
+	// Any other abbreviation is declined rather than read as UTC: time.Parse
+	// resolves it against the host's zone database, so the same line would
+	// otherwise parse to different instants on different machines.
+	assert.True(t, Parse(`Thu Aug 27 10:36:24 CEST 2026: not this shape`).Time.IsZero())
+}
+
 func TestParse_Log4jCommaMillis(t *testing.T) {
 	enriched := Parse(`2026-07-06 12:00:00,123 INFO [main] com.example.App - started`)
 	assert.Equal(t, "info", enriched.Severity)

@@ -167,11 +167,27 @@ func utcStamp(y, mo, d, hh, mi, ss, ns, offset int) time.Time {
 	return time.Unix(sec, int64(ns)).UTC()
 }
 
-// zoneTokens are the reference-layout elements that carry a zone: the numeric
-// offset forms (Z0700, Z07:00, Z07, -0700, -07:00, -07, and their
-// seconds-bearing variants, all of which start with one of these two prefixes)
-// and the abbreviation MST.
-var zoneTokens = [...]string{"Z07", "-07", "MST"}
+// zoneTokens are the reference-layout elements that put a numeric UTC offset
+// in the text: Z0700, Z07:00, Z07, -0700, -07:00, -07 and their
+// seconds-bearing variants, all of which start with one of these two prefixes.
+//
+// The MST token is deliberately NOT here. It matches a zone abbreviation, and
+// time.Parse resolves an abbreviation against the *host's* zone database:
+// "Wed Aug 26 22:26:14 CEST 2026" parses to 20:26:14Z where TZ=Europe/Stockholm
+// and to 22:26:14Z everywhere else, and an abbreviation the host does not know
+// silently becomes offset zero. A layout whose only zone element is MST
+// therefore does not tell you the offset — which is exactly what
+// TestLayoutHasZoneMatchesRoundTrip's oracle reports for it.
+var zoneTokens = [...]string{"Z07", "-07"}
+
+// fixedZoneLiterals are zone NAMES a layout may spell as plain text rather
+// than through a token. Both name offset zero, and because they are literals
+// the layout matches only text carrying that exact name — so unlike the MST
+// token above, they pin the value to an offset the host cannot change (the
+// probe over TZ=UTC/Europe/Stockholm/Europe/London/America/New_York/Asia/Tokyo/
+// Etc/GMT+5/Africa/Abidjan gives offset zero for all of them). This is how the
+// date(1) entry states its zone; see the table.
+var fixedZoneLiterals = [...]string{" UTC ", " GMT "}
 
 // layoutHasZone reports whether a layout carries a zone element — that is,
 // whether the input it parses states its own UTC offset. It is what
@@ -182,13 +198,20 @@ var zoneTokens = [...]string{"Z07", "-07", "MST"}
 //
 // The substring test is exact for a layout built from the reference date: none
 // of its other elements ("2006", "01", "Jan", "02", "Mon", "15", "04", "05",
-// ".000") can produce "Z07", "-07" or "MST", and a literal in a layout that
-// did would be pathological. TestLayoutHasZoneMatchesRoundTrip pins every
-// layout in the table against a round-trip oracle rather than trusting that
-// argument.
+// ".000") can produce "Z07" or "-07", nor a space-delimited "UTC"/"GMT", and a
+// literal in a layout that did would be pathological.
+// TestLayoutHasZoneMatchesRoundTrip pins the token layouts against a round-trip
+// oracle rather than trusting that argument, and
+// TestFixedZoneLiteralLayoutsPinTheOffset covers the literal ones, which that
+// oracle cannot reach.
 func layoutHasZone(layout string) bool {
 	for _, tok := range zoneTokens {
 		if strings.Contains(layout, tok) {
+			return true
+		}
+	}
+	for _, lit := range fixedZoneLiterals {
+		if strings.Contains(layout, lit) {
 			return true
 		}
 	}

@@ -94,7 +94,9 @@ func TestFirstBytes(t *testing.T) {
 		{`^<(?P<syslogpri>\d+)>`, "<"},
 		{`^%(?P<sysloglevel>[0-7])`, "%"},
 		{`^(?P<level>[IWEF])`, "IWEF"},
-		{`^(?P<level>INFO|WARN|ERROR|DEBUG|TRACE|FATAL):`, "IWEDTF"},
+		{`^(?P<level>INFO|WARNING|WARN|ERROR|DEBUG|TRACE|FATAL|CRITICAL):`, "IWEDTFC"},
+		{`^(?P<level>trce|dbug|info|warn|fail|crit):`, "tdiwfc"},
+		{`^(?P<time>[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d `, "MTWFS"},
 		{`(?s)^Unhandled exception\.`, "U"},
 		{`^[^[\s-]+\s-\s`, ""}, // unclassified anchored shape
 		{`unanchored`, ""},
@@ -167,6 +169,12 @@ var gateCorpus = []string{
 	`"2026-07-11T10:00:00.123Z" message`,
 	`"2026-07-11 10:00:00.123 +02:00" [x] INFO: message`,
 	`2026-07-11 10:00:00 message`,
+	`2026-07-11 10:00:00Z: Listening for Jobs`,
+	`2026-07-11 10:00:00.123Z: Listening for Jobs`,
+	`Sat Jul 11 10:00:00 UTC 2026: datasource is healthy`,
+	`Mon Jul  6 10:00:00 GMT 2026: datasource is healthy`,
+	`info: Acme.Api.Router[0]`,
+	`fail: Acme.Api.Router[17]`,
 	`2026-07`, `"2026`, `"`, `x`, ``,
 	"2026-07-11T10:00:0", "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
 }
@@ -237,6 +245,10 @@ func TestRequiredByteNeverRejectsMatches(t *testing.T) {
 		`<11>Jul 11 10:00:00 host app[42]: failed`,
 		`[ERROR] something`,
 		`ERROR: something`,
+		`WARNING:__main__:disk almost full`,
+		`info: Acme.Api.Router[0]`,
+		`Sat Jul 11 10:00:00 UTC 2026: datasource is healthy`,
+		`2026-07-11 10:00:00Z: Listening for Jobs`,
 		`audit: type=Warn msg=denied`,
 		`%4|1720686000.123|FAIL|rdkafka#producer-1| down`,
 		`2026-07-11 10:00:00 message`,
@@ -265,7 +277,7 @@ func TestEveryNamedGroupIsApplied(t *testing.T) {
 		"level": true, "time": true, "ktime": true, "stamptime": true,
 		"syslogtime": true, "sysloglevel": true, "syslogpri": true,
 		"response_code": true, "redis_level": true, "logaserror": true,
-		"unhandled": true,
+		"unhandled": true, "sourcecontext": true,
 	}
 	for _, clp := range compiledLineParsers {
 		for _, name := range clp.names {

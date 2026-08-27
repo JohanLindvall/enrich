@@ -3,6 +3,7 @@ package enrich
 import (
 	"math/rand"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,10 +277,14 @@ func TestMonthByName(t *testing.T) {
 // the oracle immune to what a layout cannot express (a dropped fraction, a
 // dropped weekday): both sides lose exactly the same components.
 //
-// It would call a layout carrying ONLY an unresolvable abbreviation ("MST"
-// with no numeric offset) zone-less, since time.Parse gives such a name offset
-// zero. No layout here is that shape; one added later shows up as a
-// disagreement with layoutHasZone, which is the conversation to have.
+// It calls a layout carrying only an unresolvable abbreviation ("MST" with no
+// numeric offset) zone-less, and that verdict is right: time.Parse resolves an
+// abbreviation against the host's zone database, so such a layout parses the
+// same text to different instants on different machines. layoutHasZone agrees
+// — the MST token is deliberately absent from zoneTokens.
+//
+// It cannot be used on a layout whose zone is a fixed LITERAL name, which is
+// why fixedZoneLiteralLayout exists; see TestFixedZoneLiteralLayoutsPinTheOffset.
 func layoutZoneOracle(t *testing.T, layout string) bool {
 	t.Helper()
 	instant := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
@@ -291,34 +296,100 @@ func layoutZoneOracle(t *testing.T, layout string) bool {
 	return a.UTC().Equal(b.UTC())
 }
 
+// fixedZoneLiteralLayout reports the zone name a layout spells as plain text,
+// or "" for a layout that names its zone through a token (or not at all).
+func fixedZoneLiteralLayout(layout string) string {
+	for _, lit := range fixedZoneLiterals {
+		if strings.Contains(layout, lit) {
+			return strings.TrimSpace(lit)
+		}
+	}
+	return ""
+}
+
 // TestLayoutHasZoneMatchesRoundTrip pins layoutHasZone — a substring test over
 // the reference-layout tokens — to the round-trip oracle, for every layout the
 // table actually uses. It is what keeps Result.TimeHasZone honest as entries
 // are added: a new layout whose zonedness the token test reads wrong fails
 // here rather than mislabelling a fleet's timestamps.
+//
+// Layouts whose zone is a fixed literal are held to
+// TestFixedZoneLiteralLayoutsPinTheOffset instead. The oracle cannot judge
+// them: Format emits such a literal whatever zone it is handed, so its "five
+// hours east" text claims an offset the writer did not have — a text no real
+// producer could have written, since one in another zone renders a different
+// name, which the literal then refuses to parse. Left in, the oracle would
+// read its own fabrication back and call every such layout zone-less.
 func TestLayoutHasZoneMatchesRoundTrip(t *testing.T) {
 	seen := map[string]bool{}
 	for _, clp := range compiledLineParsers {
 		for _, l := range clp.ts {
 			seen[l.layout] = true
-			assert.Equal(t, layoutZoneOracle(t, l.layout), l.zoned,
-				"layout %q: compiled zone flag disagrees with the round trip", l.layout)
 			assert.Equal(t, l.zoned, layoutHasZone(l.layout),
 				"layout %q: compiled flag is not layoutHasZone's answer", l.layout)
+			if fixedZoneLiteralLayout(l.layout) != "" {
+				continue
+			}
+			assert.Equal(t, layoutZoneOracle(t, l.layout), l.zoned,
+				"layout %q: compiled zone flag disagrees with the round trip", l.layout)
 		}
 	}
 	// The table must contain layouts of BOTH kinds, or the assertions above
 	// would pass on a function that answers one way for everything.
-	var zoned, bare int
+	var zoned, bare, literal int
 	for layout := range seen {
-		if layoutHasZone(layout) {
+		switch {
+		case fixedZoneLiteralLayout(layout) != "":
+			literal++
+		case layoutHasZone(layout):
 			zoned++
-		} else {
+		default:
 			bare++
 		}
 	}
-	assert.Greater(t, zoned, 0, "no zoned layout in the table")
+	assert.Greater(t, zoned, 0, "no token-zoned layout in the table")
 	assert.Greater(t, bare, 0, "no zone-less layout in the table")
+	assert.Greater(t, literal, 0, "no fixed-zone-literal layout in the table; drop the exemption above")
+}
+
+// TestFixedZoneLiteralLayoutsPinTheOffset covers the layouts the round-trip
+// oracle above cannot reach — those naming their zone as a literal rather than
+// through a reference-layout token. What has to be true of one is narrower
+// than a round trip and is asserted directly: the literal names a real zone,
+// that zone's offset is zero, and — the property the MST token fails — the
+// answer does not depend on the host's own zone, since a literal is matched as
+// text and never looked up. Text carrying any other zone name is rejected
+// outright rather than read as UTC, which is what makes the claim safe.
+func TestFixedZoneLiteralLayoutsPinTheOffset(t *testing.T) {
+	var checked int
+	for _, clp := range compiledLineParsers {
+		for _, l := range clp.ts {
+			name := fixedZoneLiteralLayout(l.layout)
+			if name == "" {
+				continue
+			}
+			checked++
+			require.True(t, l.zoned, "layout %q names a zone but is compiled zone-less", l.layout)
+
+			instant := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+			text := instant.Format(l.layout)
+			require.Contains(t, text, name, "layout %q does not actually write %s", l.layout, name)
+
+			got, err := time.Parse(l.layout, text)
+			require.NoError(t, err, "layout %q does not round-trip its own output", l.layout)
+			_, offset := got.Zone()
+			assert.Zero(t, offset, "layout %q resolves %s to a non-zero offset", l.layout, name)
+			assert.True(t, got.UTC().Equal(instant), "layout %q lost the instant", l.layout)
+
+			// The literal is matched as text: a writer in another zone renders
+			// a different name, and the layout declines it rather than reading
+			// the displaced wall clock as UTC.
+			east := instant.In(time.FixedZone("TST", 5*60*60))
+			_, err = time.Parse(l.layout, strings.Replace(east.Format(l.layout), name, "TST", 1))
+			assert.Error(t, err, "layout %q accepted a foreign zone name", l.layout)
+		}
+	}
+	assert.Greater(t, checked, 0, "no fixed-zone-literal layout in the table")
 }
 
 // TestFastFamilyLayoutsAgreeOnZone pins the promise fastTSZoned makes: a
@@ -380,6 +451,11 @@ func TestTimeHasZoneByFormat(t *testing.T) {
 		{"logfmt rfc3339", `ts=2026-07-06T12:00:00Z level=info msg=x`, true},
 		{"logfmt go string", `t="2026-03-14 06:11:46.397 +0000 UTC" level=info msg=x`, true},
 		{"logfmt epoch", `ts=1748239806.3691056 level=info msg=x`, true},
+		{"azdo agent", `2026-03-14 06:32:14Z: Job deploy-shop completed with result: Succeeded`, true},
+		// date(1) names its zone as a literal the layout matches as text, so
+		// the value is offset zero on any host — see fixedZoneLiterals.
+		{"date(1) output", `Wed Aug 26 22:26:14 UTC 2026: Datasource is healthy`, true},
+		{"date(1) output, GMT", `Thu Aug  6 02:06:14 GMT 2026: nightly run finished`, true},
 
 		// A nested line answers for the timestamp it contributed: the Docker
 		// envelope carries no time of its own, so the embedded klog stamp —

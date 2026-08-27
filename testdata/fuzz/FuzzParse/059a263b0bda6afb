@@ -1,0 +1,2 @@
+go test fuzz v1
+string("level=f t0 m00  l0000")

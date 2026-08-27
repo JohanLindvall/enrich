@@ -161,10 +161,42 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   embedded line's answer travels with its timestamp through `mergeNested`.
 - **Envoy `response_code: 0`**: no `protocol` field → TCP proxying, info;
   `response_flags` DR/DC → client disconnect, warn.
+- **A `sourcecontext` submatch fills `Result.SourceContext`** — the same datum
+  the JSON path takes from `SourceContext`/`logger`. Two table entries capture
+  it: Python `basicConfig`'s `LEVEL:name:message` (the name group is optional,
+  so the bare `ERROR: message` form the same entry always covered still
+  matches with no logger) and the .NET console formatter's
+  `info: Category[0]` header. `TestEveryNamedGroupIsApplied` pins every named
+  group in the table to a case in `applySubmatch` and back, so a new name
+  cannot be captured and silently dropped.
+- **Go cannot recover an offset from a zone ABBREVIATION, so `MST` is not a
+  zone token.** `time.Parse` resolves an abbreviation against the *host's*
+  zone database: `Wed Aug 26 22:26:14 CEST 2026` parses to 20:26:14Z where
+  `TZ=Europe/Stockholm` and to 22:26:14Z everywhere else, and a name the host
+  does not know silently becomes offset zero. `layoutHasZone` therefore
+  answers **false** for an `MST`-token layout — which is what
+  `TestLayoutHasZoneMatchesRoundTrip`'s oracle had always reported for one, and
+  the reason `zoneTokens` no longer lists it. Never put it back.
+- **A zone spelled as a LITERAL in the layout is zoned** (`fixedZoneLiterals`:
+  `" UTC "`, `" GMT "`). This is how the `date(1)` entry states its zone: a
+  literal is matched as text, so it is offset zero on every host and any other
+  zone name is declined rather than misread. The round-trip oracle cannot
+  judge such a layout — `Format` emits the literal whatever zone it is handed,
+  so the oracle's "five hours east" text is one no producer could have written
+  and it would read its own fabrication back as proof of zone-lessness.
+  `TestLayoutHasZoneMatchesRoundTrip` skips them explicitly (and fails if the
+  table stops containing one, so the exemption cannot outlive its subject);
+  `TestFixedZoneLiteralLayoutsPinTheOffset` asserts what does hold for them.
+  Adding a literal that is NOT zero-offset would need more than a new entry in
+  that list.
 - **Pino numeric levels** are handled by a raw-line scan (`pinoSeverity`),
   not the decoder: the "level" key must stay on the string Severity field
   (textual levels are far more common) and lightning rejects a key mapped to
   two fields.
+- **`trce`/`dbug`/`fail` are level spellings**, from
+  Microsoft.Extensions.Logging's console formatter (its `info`, `warn` and
+  `crit` were already in the LUT). `fail` is that vocabulary's word for
+  *error*, and it is a whole-token lookup — "failed"/"failure" name no level.
 - **Severity numbers can be finer-grained than the text**: the OTLP numbers
   give each level a range of four (`InfoLevelNo`..`Info4LevelNo`), so syslog
   notice is info with SeverityNumber Info2 (10). Parse's final normalization
@@ -304,6 +336,21 @@ without them. What the miss path costs now is essentially the whole-line
 (the ANSI guard, `=`, `:`, `\n`) over a 1 kB line. Removing one is worth ~8%,
 which is why the nginx entry got a matcher; there is no rare byte left to
 merge the remaining four into.
+
+**A table entry is not free even on lines it can never match.** Measured by
+A/B'ing the baseline against itself plus three INERT entries (bucketed away
+from the benchmark lines' first bytes, gates they always fail): ~+1.5% on
+`BenchmarkParsePattern` and `BenchmarkParseColoured`, nothing measurable on
+the miss path. The three entries added in 2026-08 (the .NET console
+formatter, `date(1)`, the ADO/GHA `Z:` shape) cost ~+1% geomean over the whole
+suite, and the same-table-size control showed the entries themselves add
+nothing on top of that — the price is the table being bigger, not the entries
+doing work. Two consequences: weigh a new entry against how common its shape
+really is, and place it where the *hot* shapes stop before reaching it (the
+`Z:` entry sits after the slash-date entries for exactly that reason, which is
+worth ~2.5% on the pattern benchmark). Note also that A/B on this laptop needs
+`taskset` pinning and ~200k iterations per round to get inside ±2%; the
+default `-benchtime` gives ±20-50% and will show you anything you like.
 
 Parse's own overhead is now small: profiling the JSON and logfmt paths shows
 the time going to `logfmt.Iterate` and the generated lightning decoder, both

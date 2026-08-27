@@ -223,9 +223,11 @@ func matchYmdSlashBracketLevel(msg string) (fastSpans, fastVerdict) {
 }
 
 // matchMsDashNoFrac decides `^(?P<time>\d{4}-\d{2}-\d{2}
-// \d{2}:\d{2}:\d{2})(Z:)?\s` (the fraction-less dash-date entry).
+// \d{2}:\d{2}:\d{2})\s` (the fraction-less dash-date entry). A "...Z:"
+// line stops here and falls through to the entry below it in the table, whose
+// zoned layout reads that Z as the UTC it states.
 func matchMsDashNoFrac(msg string) (fastSpans, fastVerdict) {
-	if !stampSkeleton(msg, '-', ' ') || zColonSpaceEnd(msg, 19) < 0 {
+	if !stampSkeleton(msg, '-', ' ') || len(msg) <= 19 || !isSpaceRE(msg[19]) {
 		return fastSpans{}, fastNoMatch
 	}
 	return fastSpans{time: [2]int{0, 19}}, fastMatched
@@ -425,7 +427,7 @@ func fastMatcherFor(re string) func(string) (fastSpans, fastVerdict) {
 		return matchLambda
 	case `^[^[\s-]+\s-\s(-|[^\s[]+)\s\[(?P<time>[^]]+)]\s+((?P<response_code>\d+)\s+"[^"]+"|"[^"]+"\s(?P<response_code>\d+)|"(([^\s]+\s)){3}(?P<response_code>\d+))\s`:
 		return matchNginxPrefix
-	case `^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(Z:)?\s`:
+	case `^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s`:
 		return matchMsDashNoFrac
 	case `^(?P<time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6})(Z:)?\s`:
 		return matchYmdSlash6Frac

@@ -23,8 +23,11 @@
 //  3. Pattern table: a list of regular expressions covering common plain-text
 //     formats — nginx/Apache access and error logs, klog, redis, syslog
 //     (RFC3164, RFC5424, and librdkafka's <N>| prefix), AWS Lambda, Spring
-//     Boot, Python logging, Go panics, .NET unhandled exceptions, Python
-//     tracebacks, and Java exceptions.
+//     Boot, Python logging (both the "asctime - name - LEVEL" style and
+//     basicConfig's "LEVEL:name:message" default), the .NET console
+//     formatter's "info: Category[0]" header, Azure DevOps and GitHub Actions
+//     agent lines, date(1)-stamped shell output, Go panics, .NET unhandled
+//     exceptions, Python tracebacks, and Java exceptions.
 //
 // Result.Format reports which strategy matched (FormatJSON, FormatLogfmt,
 // FormatPattern, or FormatNone), so callers can count enrichment hit rates
@@ -36,8 +39,8 @@
 //
 // Result.TimeHasZone reports which of those two happened: true when the line's
 // timestamp stated its own offset (an RFC3339 stamp, a numeric epoch, any
-// zoned layout) and false when it carried only a wall clock that had to be
-// read as UTC. A caller holding a second, unambiguous timestamp — a container
+// layout carrying a numeric offset or a literal UTC/GMT) and false when it
+// carried only a wall clock that had to be read as UTC. A caller holding a second, unambiguous timestamp — a container
 // runtime's or a journal's ingest time — needs it to decide which is the
 // better datum: a process running with TZ set to anything but UTC writes
 // zone-less stamps displaced by exactly that zone's offset, and nothing in the

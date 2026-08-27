@@ -166,6 +166,13 @@ func init() {
 	add(DebugLevel, DebugLevelNo, "fine")
 	add(TraceLevel, TraceLevelNo, "finer", "finest")
 
+	// The three abbreviations Microsoft.Extensions.Logging's console formatter
+	// uses that no other vocabulary spells this way (its "info", "warn" and
+	// "crit" are already above). "fail" is that formatter's word for Error.
+	add(TraceLevel, TraceLevelNo, "trce")
+	add(DebugLevel, DebugLevelNo, "dbug")
+	add(ErrorLevel, ErrorLevelNo, "fail")
+
 	buildSevTable()
 }
 

@@ -191,16 +191,48 @@ var lineParsers = []lineParser{
 
 	// Entries without timestamp
 	{"", `^\[(?P<level>[A-Z]+)\]`, nil},
-	{"", `^(?P<level>INFO|WARN|ERROR|DEBUG|TRACE|FATAL):`, nil},
+	// Python's logging.basicConfig default, "%(levelname)s:%(name)s:%(message)s"
+	// ("WARNING:__main__:disk almost full"), and the bare "LEVEL: message" form
+	// the same alternation already covered. The logger name is optional because
+	// only the first shape carries one, and it must be followed by its own ':'
+	// — "ERROR: connection refused" leaves the group unmatched.
+	{"", `^(?P<level>INFO|WARNING|WARN|ERROR|DEBUG|TRACE|FATAL|CRITICAL):((?P<sourcecontext>[\w.]+):)?`, nil},
+	// Microsoft.Extensions.Logging's console formatter writes a header line —
+	// "<level>: <Category>[<EventId>]" — and indents the message onto the next
+	// one. Those six abbreviations are its whole level vocabulary, and the
+	// bracketed event ID is what separates the shape from ordinary prose: an
+	// "info: " with anything else after it is not this format.
+	{"", `^(?P<level>trce|dbug|info|warn|fail|crit): (?P<sourcecontext>[^\s\[]+)\[\d+\](\n|$)`, nil},
 	{"type=", `\btype=(?P<level>[A-Z][a-z]+)\b`, nil},
 
 	// librdkafka
 	{"|", `^%(?P<sysloglevel>[0-7])\|(?P<syslogtime>\d+(\.\d+)?)\|`, []string{}},
 
 	// Entries without level
-	{"", `^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(Z:)?\s`, []string{"2006-01-02 15:04:05"}},
+	{"", `^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s`, []string{"2006-01-02 15:04:05"}},
 	{"", `^` + ymdSlashExpr + `(Z:)?\s`, ymdSlashLayouts},
+	// date(1) output, the timestamp a shell script's log lines carry
+	// ("Wed Aug 26 22:26:14 UTC 2026: datasource is healthy"). Both layouts
+	// spell the zone as LITERAL text rather than time.UnixDate's MST token,
+	// which is also why only the two zero-offset names are accepted: the MST
+	// token resolves an abbreviation against the *host's* zone database, so
+	// "... CEST 2026" would parse to 20:26:14Z where TZ=Europe/Stockholm and
+	// to 22:26:14Z everywhere else. A literal is matched as text — offset zero
+	// on every host, and any other zone name declined rather than misread — so
+	// unlike every other abbreviation-bearing shape this one does name an
+	// instant, and layoutHasZone reports it zoned.
+	{"", `^(?P<time>[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2} (UTC|GMT) \d{4})\b`,
+		[]string{"Mon Jan _2 15:04:05 UTC 2006", "Mon Jan _2 15:04:05 GMT 2006"}},
 	{"", `^(?P<time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6})(Z:)?\s`, []string{"2006/01/02 15:04:05.000000"}},
+	// The Azure DevOps and GitHub Actions agents prefix their lines with .NET's
+	// "u" format and a colon ("2026-03-14 06:32:14Z: Listening for Jobs"). The
+	// Z states UTC, so this yields an instant where the fraction-less dash
+	// entry above can only yield a wall clock — that entry's hand matcher now
+	// declines a "...Z:" line so it falls through to here. Position within
+	// this group is a cost question only, since the slash entries' positional
+	// gates and this one's are mutually exclusive: putting it last spares
+	// every slash-date line a bucket iteration it would always reject.
+	{"", `^` + rfc3339NanoSpaceExpr + `:\s`, []string{rfc3339NanoSpaceLayout}},
 
 	// Go panic
 	{"panic: runtime error: invalid memory address or nil pointer dereference", `(?P<logaserror>.+)`, []string{}},
@@ -329,6 +361,12 @@ func posGates(re string) (quoted bool, gates []posGate) {
 		return quoted, []posGate{{4, '-'}, {10, 'T'}}
 	case strings.HasPrefix(re, `^(?P<time>\d{4}-\d{2}-\d{2} `):
 		return quoted, []posGate{{4, '-'}, {10, ' '}}
+	case strings.HasPrefix(re, `^(?P<time>[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d `):
+		// date(1): "Www Mmm _d ...", so the month and day both end on a space.
+		return quoted, []posGate{{7, ' '}, {10, ' '}}
+	case strings.HasPrefix(re, `^(?P<level>trce|dbug|info|warn|fail|crit): `):
+		// Every spelling is four bytes, so the ": " sits at a fixed offset.
+		return quoted, []posGate{{4, ':'}, {5, ' '}}
 	}
 	return false, nil
 }
@@ -442,8 +480,12 @@ func firstBytes(re string) string {
 		return "%"
 	case strings.HasPrefix(re, `^(?P<level>[IWEF])`): // klog
 		return "IWEF"
-	case strings.HasPrefix(re, `^(?P<level>INFO|WARN|ERROR|DEBUG|TRACE|FATAL):`):
-		return "IWEDTF"
+	case strings.HasPrefix(re, `^(?P<level>INFO|WARNING|WARN|ERROR|DEBUG|TRACE|FATAL|CRITICAL):`):
+		return "IWEDTFC"
+	case strings.HasPrefix(re, `^(?P<level>trce|dbug|info|warn|fail|crit):`):
+		return "tdiwfc"
+	case strings.HasPrefix(re, `^(?P<time>[A-Z][a-z]{2} [A-Z][a-z]{2} `): // date(1): weekday first
+		return "MTWFS"
 	case strings.HasPrefix(re, `^Unhandled`):
 		return "U"
 	}
@@ -515,6 +557,10 @@ func (clp *compiledLineParser) applySubmatch(result *Result, name, value string)
 	switch name {
 	case "level":
 		result.Severity = value
+	case "sourcecontext":
+		// The logger/category name, the same datum the JSON path takes from
+		// "SourceContext"/"logger".
+		result.SourceContext = value
 	case "syslogtime":
 		if ts, ok := parseSyslogTime(value); ok {
 			// An epoch names an instant outright: there is no wall clock and

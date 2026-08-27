@@ -64,6 +64,12 @@ func TestSeverityFromText(t *testing.T) {
 		{"f", FatalLevel, FatalLevelNo},
 		{"ftl", FatalLevel, FatalLevelNo},
 		{"crit", FatalLevel, FatalLevelNo},
+		// Microsoft.Extensions.Logging's console-formatter spellings.
+		{"trce", TraceLevel, TraceLevelNo},
+		{"dbug", DebugLevel, DebugLevelNo},
+		{"fail", ErrorLevel, ErrorLevelNo},
+		{"failed", "", 0},
+		{"failure", "", 0},
 		{"critical", FatalLevel, FatalLevelNo},
 		{"panic", FatalLevel, FatalLevelNo},
 		{"pnc", FatalLevel, FatalLevelNo},
@@ -223,6 +229,14 @@ var normalizeReg = []struct {
 	{regexp.MustCompile(`^(?i)severe$`), ErrorLevel, ErrorLevelNo},
 	{regexp.MustCompile(`^(?i)fine$`), DebugLevel, DebugLevelNo},
 	{regexp.MustCompile(`^(?i)fine(r|st)$`), TraceLevel, TraceLevelNo},
+
+	// Microsoft.Extensions.Logging's console-formatter abbreviations. The
+	// trace and debug ones take the same numeric suffix every other spelling
+	// of their level does; "fail" does not, because only trace and debug are
+	// graded that way.
+	{regexp.MustCompile(`^(?i)trce\d*$`), TraceLevel, TraceLevelNo},
+	{regexp.MustCompile(`^(?i)dbug\d*$`), DebugLevel, DebugLevelNo},
+	{regexp.MustCompile(`^(?i)fail$`), ErrorLevel, ErrorLevelNo},
 }
 
 func regexSeverity(input string) (string, int) {
