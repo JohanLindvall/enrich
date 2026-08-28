@@ -293,6 +293,43 @@ func SeverityFromNumber(severity int) string {
 	return ""
 }
 
+// benignError reports whether the logger/message pair is one a producer writes
+// at error level for a condition that is not a failure anybody has to act on:
+// a transient timeout it retries out of, or a self-healing inconsistency it
+// logs and carries on from. Parse grades such a line down to warn, keeping it
+// visible without letting it page anyone (Result.SeverityNumber stays
+// Warn4LevelNo, the top of the warn range, so a caller can still tell a
+// downgraded error from a warning the producer meant).
+//
+// Both halves must match whole. Keying on the logger as well as the message is
+// what keeps this safe to ship in a general-purpose library: the line's own
+// level is being overridden, and a message alone — "Failed to get plugin" is
+// nobody's idea of a distinctive string — would silently suppress the same
+// wording from a program that meant it. A line whose logger this package never
+// saw is left alone, which is the direction to fail in. That, plus knowing why
+// the condition is not actionable, is the bar for adding an entry; "this is
+// noisy in our fleet" is a reason to filter downstream, not to relabel it for
+// every caller.
+func benignError(logger, msg string) bool {
+	switch logger {
+	// Grafana's plugin registry and secrets store both log a lookup that ran
+	// out of context deadline, once per alert rule evaluated. The call is
+	// retried on the next evaluation and alerting keeps working; a genuinely
+	// missing plugin or secret is reported by other messages.
+	case "plugins.store":
+		return msg == "Failed to get plugin"
+	case "secrets.kvstore":
+		return msg == "error getting secret value"
+	// Grafana's apiserver cannot always convert a stored dashboard to its
+	// typed schema when refreshing managedFields. It logs this, skips the
+	// field update and serves the dashboard regardless — the "[SHOULD NOT
+	// HAPPEN]" prefix is the author's, not a statement about impact.
+	case "grafana-apiserver":
+		return msg == "[SHOULD NOT HAPPEN] failed to update managedFields"
+	}
+	return false
+}
+
 // syslogSeverity maps a syslog severity (0-7, the low three bits of the
 // priority) to a normalized level and OTLP severity number, following the
 // mapping in the OpenTelemetry logs data model. Three syslog severities are

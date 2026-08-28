@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse_Syslog_RFC5424(t *testing.T) {
@@ -163,6 +164,78 @@ func TestParse_DateCommandPrefix(t *testing.T) {
 	assert.True(t, Parse(`Thu Aug 27 10:36:24 CEST 2026: not this shape`).Time.IsZero())
 }
 
+// A producer that logs a retried timeout or a self-healing inconsistency at
+// error level is graded down to a top-of-range warn, so the line stays visible
+// without paging anyone. See benignError for what qualifies.
+func TestParse_BenignErrorsGradeToWarn(t *testing.T) {
+	for _, line := range []string{
+		`logger=plugins.store rule_uid=00000000000000 org_id=1 t=2026-08-27T15:56:16.767473145Z level=error msg="Failed to get plugin" error="context deadline exceeded"`,
+		`logger=secrets.kvstore t=2026-08-27T15:55:11.715209889Z level=error msg="error getting secret value" orgId=1 type=datasource namespace=Metrics err="context deadline exceeded"`,
+		`logger=grafana-apiserver t=2026-08-27T14:55:39.761685442Z level=error msg="[SHOULD NOT HAPPEN] failed to update managedFields" err="failed to convert new object" namespace=default`,
+	} {
+		enriched := Parse(line)
+		assert.Equal(t, WarnLevel, enriched.Severity, line)
+		assert.Equal(t, Warn4LevelNo, enriched.SeverityNumber,
+			"a downgraded error keeps the top of the warn range, so a caller can still tell it from a warning the producer meant")
+		assert.Equal(t, FormatLogfmt, enriched.Format, line)
+		assert.False(t, enriched.Time.IsZero(), "the rest of the line is enriched as usual")
+		assert.NotEmpty(t, enriched.Message, line)
+	}
+
+	// The same pair shipped as JSON takes the same route: the rule reads
+	// Result.SourceContext and Result.Message, which both structured paths fill.
+	enriched := Parse(`{"level":"error","msg":"Failed to get plugin","logger":"plugins.store"}`)
+	assert.Equal(t, WarnLevel, enriched.Severity)
+	assert.Equal(t, Warn4LevelNo, enriched.SeverityNumber)
+	assert.Equal(t, FormatJSON, enriched.Format)
+}
+
+// The downgrade is narrow in every direction it could leak: it needs the line
+// to have settled on error, and it matches BOTH the logger and the message
+// whole. Either half alone leaves the error standing — which is the point of
+// keying on the logger, since "Failed to get plugin" is not a string only
+// Grafana could write.
+func TestParse_BenignErrorDowngradeIsNarrow(t *testing.T) {
+	const listed = `logger=plugins.store level=error msg="Failed to get plugin"`
+	require.Equal(t, WarnLevel, Parse(listed).Severity, "the pair this test varies must itself qualify")
+
+	for name, line := range map[string]string{
+		"no logger at all":   `level=error msg="Failed to get plugin"`,
+		"another logger":     `logger=plugin.loader level=error msg="Failed to get plugin"`,
+		"logger cased":       `logger=Plugins.Store level=error msg="Failed to get plugin"`,
+		"message extended":   `logger=plugins.store level=error msg="Failed to get plugin from registry"`,
+		"message prefixed":   `logger=plugins.store level=error msg="registry: Failed to get plugin"`,
+		"message pluralized": `logger=plugins.store level=error msg="Failed to get plugins"`,
+		"message cased":      `logger=plugins.store level=error msg="failed to get plugin"`,
+		"message empty":      `logger=plugins.store level=error`,
+		"other message":      `logger=plugins.store level=error msg="connection refused"`,
+		"crossed pair":       `logger=secrets.kvstore level=error msg="Failed to get plugin"`,
+	} {
+		enriched := Parse(line)
+		assert.Equal(t, ErrorLevel, enriched.Severity, name)
+		assert.Equal(t, ErrorLevelNo, enriched.SeverityNumber, name)
+	}
+
+	// A level that is not error is untouched. In particular a level BELOW warn
+	// must not be graded up: this only ever moves a line down.
+	for _, tc := range []struct {
+		level string
+		want  string
+		no    int
+	}{
+		{"info", InfoLevel, InfoLevelNo},
+		{"debug", DebugLevel, DebugLevelNo},
+		{"fatal", FatalLevel, FatalLevelNo},
+	} {
+		enriched := Parse(`logger=plugins.store level=` + tc.level + ` msg="Failed to get plugin"`)
+		assert.Equal(t, tc.want, enriched.Severity, tc.level)
+		assert.Equal(t, tc.no, enriched.SeverityNumber, tc.level)
+	}
+
+	// A plain-text error has neither field, so nothing can match.
+	assert.Equal(t, ErrorLevel, Parse(`2026/07/11 10:00:00 [error] upstream timed out`).Severity)
+}
+
 func TestParse_Log4jCommaMillis(t *testing.T) {
 	enriched := Parse(`2026-07-06 12:00:00,123 INFO [main] com.example.App - started`)
 	assert.Equal(t, "info", enriched.Severity)
@@ -262,6 +335,7 @@ func FuzzParse(f *testing.F) {
 	f.Add(`{"level":30,"time":1751805600000,"msg":"pino"}`)
 	f.Add("\x1b[31mERROR\x1b[0m colored")
 	f.Add(`traceparent=00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01`)
+	f.Add(`logger=plugins.store t=2026-08-27T15:56:16Z level=error msg="Failed to get plugin"`)
 	f.Fuzz(func(t *testing.T, line string) {
 		result := Parse(line)
 		if result.Body != line {
@@ -286,7 +360,7 @@ func FuzzParse(f *testing.F) {
 func TestValidTraceID(t *testing.T) {
 	for _, valid := range []string{
 		"4bf92f3577b34da6a3ce929d0e0e4736",     // 32 bare hex
-		"aebbb7bc-7ece-ee11-d090-84a20f1aa7b4", // Envoy request_id (UUID)
+		"aabbccdd-eeff-0011-2233-445566778899", // Envoy request_id (UUID)
 		"4BF92F3577B34DA6A3CE929D0E0E4736",     // uppercase
 	} {
 		assert.True(t, validTraceID(valid), "should be valid: %q", valid)

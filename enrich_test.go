@@ -692,6 +692,29 @@ func TestParse_Logfmt_Message(t *testing.T) {
 	assert.Equal(t, "Liveness probe failed", enriched.Message)
 }
 
+// logger= is the logfmt spelling of the field the JSON path fills from
+// "logger"/"SourceContext" — Grafana's stack, Go's slog and the logrus and zap
+// logfmt encoders all name their logger this way.
+func TestParse_Logfmt_Logger(t *testing.T) {
+	enriched := Parse(`logger=plugins.store t=2026-03-14T09:26:53Z level=info msg="plugin loaded"`)
+	assert.Equal(t, "plugins.store", enriched.SourceContext)
+	assert.Equal(t, "plugin loaded", enriched.Message)
+	assert.Equal(t, FormatLogfmt, enriched.Format)
+
+	// Last on the line, after every other signal has been found: the scan does
+	// not stop early on it.
+	enriched = Parse(`ts=2026-03-14T09:26:53Z level=info trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=00f067aa0ba902b7 msg=x logger=app.web`)
+	assert.Equal(t, "app.web", enriched.SourceContext)
+
+	// The first spelling wins, as it does for msg and the trace IDs.
+	assert.Equal(t, "first", Parse(`level=info logger=first logger=second`).SourceContext)
+
+	// A line with no logger leaves the field alone rather than blanking it.
+	assert.Empty(t, Parse(`level=info msg=x`).SourceContext)
+	assert.Equal(t, "Acme.Api.Router", Parse(`info: Acme.Api.Router[0]`).SourceContext,
+		"the pattern table still fills the same field when the logfmt scan found nothing")
+}
+
 func TestParse_TraceID_DashedRequestID(t *testing.T) {
 	// A dashed UUID request_id de-dashes to the 32-hex trace id; the returned string
 	// must be a stable, independent value (removeDashesASCII hands out a view of its

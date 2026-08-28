@@ -17,8 +17,8 @@
 //     severityNumber/severityText, Azure diagnostic-log envelopes with nested
 //     properties.log payloads, Docker json-file records, MongoDB structured
 //     logs, and Pino/Bunyan numeric levels).
-//  2. logfmt: a key/value scan picks up t/ts/time/timestamp, level, msg, and
-//     trace correlation IDs (trace_id/span_id spellings and W3C
+//  2. logfmt: a key/value scan picks up t/ts/time/timestamp, level, msg,
+//     logger, and trace correlation IDs (trace_id/span_id spellings and W3C
 //     traceparent).
 //  3. Pattern table: a list of regular expressions covering common plain-text
 //     formats — nginx/Apache access and error logs, klog, redis, syslog
@@ -32,6 +32,10 @@
 // Result.Format reports which strategy matched (FormatJSON, FormatLogfmt,
 // FormatPattern, or FormatNone), so callers can count enrichment hit rates
 // and debug unparsed lines.
+//
+// A short list of logger/message pairs that producers log at error level for
+// conditions nobody has to act on — a retried timeout, a self-healing
+// inconsistency — is graded down to a top-of-range warn; see benignError.
 //
 // A timestamp that carries no zone offset is interpreted as UTC, and every
 // Result.Time is returned in UTC. Formats whose timestamp has no year (klog,

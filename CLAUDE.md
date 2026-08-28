@@ -134,7 +134,10 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   `=` pairs. It scans the whole line (no early exit) so trace_id/span_id/
   traceparent keys are found wherever they appear. Its callback rejects a key
   it does not care about with one probe of `logfmtKeyGate`, which holds the
-  *lengths* the keys starting with each byte come in — the first byte alone is
+  *lengths* the keys starting with each byte come in — so a logfmt spelling is
+  NOT as cheap as a JSON one (`logger` is the only spelling of `SourceContext`
+  the scan takes; every extra length a first byte admits is a key the gate
+  stops rejecting for free) — the first byte alone is
   a weak filter, since every `session_attr_*` key of a browser-telemetry line
   shares its 's' with the span-ID spellings. `logfmtKeys` is the single list
   the gate is built from and `TestLogfmtKeyGate` pins it against the switch in
@@ -197,6 +200,18 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   Microsoft.Extensions.Logging's console formatter (its `info`, `warn` and
   `crit` were already in the LUT). `fail` is that vocabulary's word for
   *error*, and it is a whole-token lookup — "failed"/"failure" name no level.
+- **`benignError` overrides the line's OWN level**, which nothing else in the
+  package does — a producer that logs a retried timeout or a self-healing
+  inconsistency at error level is graded to warn with `Warn4LevelNo` (the top
+  of the range, so a caller can still tell it from a warning the producer
+  meant). It runs in `fillResult` *after* the normalization, keyed on the level
+  the whole line settled on, and matches `Result.SourceContext` **and**
+  `Result.Message`, both whole. The logger half is what makes it safe to ship
+  in a general-purpose library: "Failed to get plugin" on its own would
+  suppress the same wording from a program that meant it, and a line whose
+  logger the list never saw is left alone. That, plus knowing why the condition
+  is not actionable, is the bar for a new entry; "noisy in our fleet" is a
+  reason to filter downstream, not to relabel it for every caller.
 - **Severity numbers can be finer-grained than the text**: the OTLP numbers
   give each level a range of four (`InfoLevelNo`..`Info4LevelNo`), so syslog
   notice is info with SeverityNumber Info2 (10). Parse's final normalization

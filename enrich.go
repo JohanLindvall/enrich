@@ -360,15 +360,22 @@ func removeDashesASCII(s string) string {
 }
 
 // logfmtKeys are the keys enrichFromLogFmt's switch inspects (t/ts/time/
-// timestamp, level, msg/message, the trace/span/traceparent spellings, both
-// cases). The list mirrors the switch's case clauses by hand — a new case
+// timestamp, level, msg/message, logger, the trace/span/traceparent spellings,
+// both cases). The list mirrors the switch's case clauses by hand — a new case
 // whose spelling is missing here is silently never matched, so extend both
 // together; TestLogfmtKeyGate pins the two against each other, and the
 // per-spelling tests (TestParse_TraceIDSpellings,
 // TestParse_Logfmt_TimestampKeys, TestParse_Logfmt_Message) catch a miss end
 // to end.
+//
+// Only the bare "logger" spelling is here, not the loggerName/logger_name/
+// sourceContext forms the JSON decoder also accepts. A logfmt key costs more
+// than a JSON one: each spelling adds a length to its first byte's gate word,
+// and every extra length that byte admits is a key the gate stops rejecting
+// for free. The logfmt producers that name their logger at all (Grafana's
+// stack, Go's slog, the logrus and zap logfmt encoders) spell it this way.
 var logfmtKeys = []string{
-	"t", "ts", "time", "timestamp", "level", "msg", "message",
+	"t", "ts", "time", "timestamp", "level", "msg", "message", "logger",
 	"traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id",
 	"spanid", "spanId", "spanID", "SpanId", "SpanID", "span_id", "span.id",
 	"traceparent",
@@ -425,7 +432,7 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	var ts time.Time
 	var tsFound, levelGood bool
 	var levelNo int
-	var level, msg, traceID, spanID, tpTraceID, tpSpanID string
+	var level, msg, logger, traceID, spanID, tpTraceID, tpSpanID string
 
 	// message is immutable; alias its bytes rather than copying.
 	buf := unsafe.Slice(unsafe.StringData(message), len(message))
@@ -473,6 +480,10 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 			if msg == "" {
 				msg = sval
 			}
+		case "logger":
+			if logger == "" {
+				logger = sval
+			}
 		case "traceid", "traceId", "traceID", "TraceId", "TraceID", "trace_id", "trace.id":
 			if traceID == "" && validTraceID(sval) {
 				traceID = sval
@@ -491,7 +502,7 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 		// Keep scanning while any signal is still missing. A found traceparent
 		// does not stop the scan: an explicit trace_id/span_id later in the
 		// line would still win over it.
-		return !levelGood || !tsFound || msg == "" || traceID == "" || spanID == ""
+		return !levelGood || !tsFound || msg == "" || logger == "" || traceID == "" || spanID == ""
 	})
 
 	// Explicit keys name the record's own IDs and win; a propagated
@@ -520,8 +531,10 @@ func (result *Result) enrichFromLogFmt(message string, memo *byteMemo) bool {
 	}
 	// The message is kept even when the line is not claimed as logfmt: a
 	// key=value line the pattern table resolves instead (a Kubernetes event,
-	// say) still carries its msg= in the same place.
+	// say) still carries its msg= in the same place. Same for the logger name,
+	// which lands in the field the JSON path fills from "logger".
 	result.Message = msg
+	result.SourceContext = logger
 	return tsFound || level != "" || result.TraceID != ""
 }
 
@@ -614,6 +627,16 @@ func fillResult(result *Result) bool {
 	result.Severity = sev
 	if result.SeverityNumber == 0 || SeverityFromNumber(result.SeverityNumber) != sev {
 		result.SeverityNumber = no
+	}
+
+	// Last of all, and only for a line that ended up an error: a handful of
+	// producers log a retried timeout or a self-healing inconsistency at error
+	// level, and those grade down to a top-of-range warn (see benignError).
+	// This runs after the normalization above rather than inside a parser
+	// because it answers to the level the whole line settled on, not to
+	// whichever signal happened to set it.
+	if sev == ErrorLevel && benignError(result.SourceContext, result.Message) {
+		result.Severity, result.SeverityNumber = WarnLevel, Warn4LevelNo
 	}
 
 	return result.Format != FormatNone

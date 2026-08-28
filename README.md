@@ -44,7 +44,7 @@ go get github.com/JohanLindvall/enrich
    numeric levels (`"level":30`).
 2. **logfmt** — a key/value scan
    ([logfmt](https://github.com/JohanLindvall/logfmt)) picks up
-   `t`/`ts`/`time`/`timestamp`, `level`, `msg`/`message`, and trace
+   `t`/`ts`/`time`/`timestamp`, `level`, `msg`/`message`, `logger`, and trace
    correlation IDs (`trace_id`/`span_id` spellings and W3C `traceparent`).
 3. **Pattern table** — regular expressions covering common plain-text formats:
    nginx and Apache access/error logs, klog, redis, syslog (RFC3164, RFC5424,
@@ -70,7 +70,7 @@ debug unparsed lines.
 | `Message` | the message without its envelope (JSON/logfmt only — a plain-text line's message is not separable from `Body`) |
 | `HTTPStatusCode` | the status code the line reports, 0 if none |
 | `TraceID`, `SpanID` | whole identifiers only — see below |
-| `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context (`SourceContext` also carries the logger/category name of a Python `basicConfig` or .NET console-formatter line) |
+| `Template`, `TemplateHash`, `SourceContext`, `Service`, `Version`, `Product` | structured-log context (`SourceContext` is the logger/category name: a JSON `logger`, a logfmt `logger=`, or the name a Python `basicConfig` or .NET console-formatter line carries) |
 | `ResourceID`, `ResourceGroupID`, `EventCategory` | Azure resource metadata (`ResourceGroupID` is the group's own full ARM resource ID, not its bare name) |
 | `ExceptionType`, `ExceptionMessage`, `ExceptionStackTrace` | from a Serilog `@x` payload, the ECS/OTel `error.*` keys, or a .NET unhandled-exception line |
 
@@ -122,6 +122,18 @@ six names flatten away is kept: syslog's *notice* is an info with
 and `Fatal3LevelNo`, and an OTLP-JSON record's own `severityNumber` is taken
 as given. `Severity` and `SeverityNumber` never contradict each other, whatever
 order the signals in a line arrive in.
+
+A short list of logger/message pairs is graded *down*. Some producers log a
+condition at error level that nobody has to act on — a lookup that timed out
+and will be retried on the next pass, an inconsistency the producer logs and
+then recovers from. Those become `warn` with `Warn4LevelNo`, the top of the
+warn range, so the line stays visible without paging anyone and a caller can
+still tell a downgraded error from a warning the producer meant. This is the
+only place the package overrides a level the line states outright, so the bar
+is deliberately high: both the logger (`SourceContext`) and the message must
+match whole, and a line whose logger is not on the list is left alone. See
+`benignError` in `severity.go` for the current list and the reasoning behind
+each entry.
 
 When a line carries no explicit level, HTTP response codes and gRPC status
 codes map to a severity (`HTTPStatusSeverity`): 1xx–3xx → info, 5xx → warn,
