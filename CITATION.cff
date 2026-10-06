@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use enrich in your work, please cite it as below."
+type: software
+title: "enrich: zero-config log line enrichment for Go"
+abstract: >-
+  enrich is a Go library that auto-detects the format of a log line (JSON,
+  logfmt, or one of 20+ plain-text formats such as nginx, klog and syslog) and
+  extracts its timestamp, its level normalized to OpenTelemetry's severity
+  scale, the message, W3C trace-context trace and span IDs, the HTTP status
+  code, exception details and Azure resource metadata, with no per-source
+  configuration and, on the common paths, without allocating once the result
+  is reused.
+authors:
+  - family-names: Lindvall
+    given-names: Johan
+repository-code: "https://github.com/JohanLindvall/enrich"
+url: "https://pkg.go.dev/github.com/JohanLindvall/enrich"
+license: MIT
+keywords:
+  - logging
+  - log parsing
+  - observability
+  - OpenTelemetry
+  - structured logging
+  - logfmt
+  - syslog
+  - Go

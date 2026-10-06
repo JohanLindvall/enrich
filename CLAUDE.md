@@ -93,6 +93,19 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
 - `testdata/fuzz/FuzzParse/` — the corpus the fuzzer accumulated. `go test`
   replays every entry as a seed, so it is a regression suite; add to it by
   running the fuzzer and copying new finds out of `$(go env GOCACHE)/fuzz`.
+- `example_test.go` — `ExampleParse` is also the README's opening example and
+  the program behind its Go Playground badge (`go.dev/play/p/2lyh8ilq-Rv`):
+  same lines, same output, so change the three together. The snippet pins
+  `v0.1.17` in its own `-- go.mod --` section, so an API change cannot break
+  the live demo; when the example changes, re-share it (POST the file to
+  `https://go.dev/_/share` with `Content-Type: text/plain` — a form-encoded
+  body is stored as an empty snippet) and update the badge's link.
+- `SECURITY.md` points at GitHub's private vulnerability reporting, which is
+  enabled on the repository. `CITATION.cff` deliberately has no `version` or
+  `date-released`: CI tags a patch version on every green main build, so a
+  hard-coded one would be stale by the next push. The README's badges are CI,
+  version, Go Reference and license — Go Report Card was sunset in 2026 and
+  its badge now reads "retired"; don't re-add it.
 
 ## Invariants and gotchas
 
@@ -250,6 +263,10 @@ the Result), `ParseInto(string, *Result) bool` and `ParseBytes([]byte,
   A fast path may decline an input — the slow path then decides — but a
   claimed answer must be byte-identical to the oracle's. When you touch one,
   extend its differential test in the same commit; never delete an oracle.
+- **Every hand-written `.go` file starts with `// SPDX-License-Identifier: MIT`
+  and a blank line** — the blank line is what keeps it out of `doc.go`'s
+  package comment. `fields_unmarshal.go` has none: the lightning generator
+  writes the whole file and has no header option.
 - **Test data is anonymized.** Log lines in tests use example.com/acme/base
   names, TEST-NET IPs (203.0.113.x), and all-zero dummy GUIDs. Keep it that
   way: never paste raw production log lines into tests — scrub domains,

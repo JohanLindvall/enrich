@@ -1,7 +1,11 @@
-// Package enrich extracts metadata from log lines: the timestamp, a
-// normalized severity, the message, trace/span identifiers, an HTTP status
-// code, structured-log fields (message template, source context,
-// service/version/product), Azure resource metadata, and exception details.
+// SPDX-License-Identifier: MIT
+
+// Package enrich auto-detects the format of a log line — JSON, logfmt, or one
+// of 20+ plain-text formats — and extracts its metadata with no per-source
+// configuration: the timestamp, a normalized severity, the message,
+// trace/span identifiers, an HTTP status code, structured-log fields (message
+// template, source context, service/version/product), Azure resource
+// metadata, and exception details.
 //
 // # Parsing
 //

@@ -1,22 +1,44 @@
 # enrich
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/JohanLindvall/enrich.svg)](https://pkg.go.dev/github.com/JohanLindvall/enrich)
 [![CI](https://github.com/JohanLindvall/enrich/actions/workflows/ci.yml/badge.svg)](https://github.com/JohanLindvall/enrich/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/JohanLindvall/enrich)](https://goreportcard.com/report/github.com/JohanLindvall/enrich)
+[![Version](https://img.shields.io/github/v/tag/JohanLindvall/enrich?sort=semver&label=version)](https://github.com/JohanLindvall/enrich/tags)
+[![Go Reference](https://pkg.go.dev/badge/github.com/JohanLindvall/enrich.svg)](https://pkg.go.dev/github.com/JohanLindvall/enrich)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Extracts metadata from log lines in Go: timestamp, normalized severity, the
-message, trace/span IDs, HTTP status code, structured-log fields, Azure
-resource metadata, and exception details — from JSON, logfmt, and a wide range
-of plain-text formats.
+**enrich** is a zero-config Go library for reading log lines you did not
+write. One call, `enrich.Parse(line)`, auto-detects JSON, logfmt and 20+
+plain-text formats (nginx, klog, syslog, Spring Boot, Python tracebacks, Java
+exceptions, …) and extracts the timestamp, the level normalized to
+[OpenTelemetry's severity scale](https://opentelemetry.io/docs/specs/otel/logs/data-model/#field-severitynumber),
+the message, [W3C trace-context](https://www.w3.org/TR/trace-context/) trace
+and span IDs, the HTTP status and exception details — in a few hundred
+nanoseconds a line, and without allocating on the common paths once you reuse
+the `Result` ([benchmarks](#benchmarks)). No other embeddable Go library
+auto-detects the log format and extracts all of this in one call
+([alternatives](#alternatives)).
 
 ```go
-e := enrich.Parse(`{"@t":"2021-09-01T12:00:00Z","@l":"Information","@m":"Hello, World!"}`)
-fmt.Println(e.Time)     // 2021-09-01 12:00:00 +0000 UTC
-fmt.Println(e.Severity) // info
-fmt.Println(e.Message)  // Hello, World!
-fmt.Println(e.Format)   // json
+for _, line := range []string{
+    `{"level":50,"time":1788264000000,"msg":"timeout","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736"}`,
+    `ts=2026-09-01T12:00:01Z level=warn msg=retrying trace_id=4bf92f3577b34da6a3ce929d0e0e4736`,
+    `203.0.113.7 - - [01/Sep/2026:12:00:02 +0000] "GET /api HTTP/1.1" 503 19 "-" "curl/8.5.0"`,
+} {
+    r := enrich.Parse(line)
+    fmt.Printf("%-7s %s %-5s status=%-3d trace=%s\n",
+        r.Format, r.Time.Format(time.RFC3339), r.Severity, r.HTTPStatusCode, r.TraceID)
+}
 ```
+
+```text
+json    2026-09-01T12:00:00Z error status=0   trace=4bf92f3577b34da6a3ce929d0e0e4736
+logfmt  2026-09-01T12:00:01Z warn  status=0   trace=4bf92f3577b34da6a3ce929d0e0e4736
+pattern 2026-09-01T12:00:02Z warn  status=503 trace=
+```
+
+Pino's numeric level and epoch-millisecond time, a logfmt line, and an nginx
+access line whose 503 is its only severity signal: one call, the same fields.
+
+[![Try it on the Go Playground](https://img.shields.io/badge/Try_it_on_the-Go_Playground-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/play/p/2lyh8ilq-Rv)
 
 ## Install
 
@@ -248,6 +270,20 @@ timestamp formats (time only), grok ports like
 patterns you supply, and [go-logfmt](https://github.com/go-logfmt/logfmt) is
 a parsing primitive. The standard Go logging libraries (slog, zap, logrus,
 zerolog) are writers, not readers — none parse foreign logs.
+
+## Star history
+
+<a href="https://www.star-history.com/#JohanLindvall/enrich&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=johanlindvall/enrich&type=Date&theme=dark">
+    <img alt="Star history of JohanLindvall/enrich" src="https://api.star-history.com/svg?repos=johanlindvall/enrich&type=Date">
+  </picture>
+</a>
+
+## Security
+
+Report vulnerabilities privately, not in a public issue — see
+[SECURITY.md](SECURITY.md).
 
 ## License
 
